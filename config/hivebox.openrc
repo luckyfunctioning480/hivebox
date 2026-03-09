@@ -1,0 +1,36 @@
+#!/sbin/openrc-run
+# OpenRC init script for the HiveBox daemon.
+#
+# Install: cp config/hivebox.openrc /etc/init.d/hivebox
+# Enable:  rc-update add hivebox default
+# Start:   rc-service hivebox start
+
+name="hivebox"
+description="HiveBox sandbox daemon"
+
+command="/usr/bin/hivebox"
+command_args="daemon --port ${HIVEBOX_PORT:-7070}"
+command_background="yes"
+pidfile="/run/${name}.pid"
+output_log="/var/log/${name}.log"
+error_log="/var/log/${name}.log"
+
+# Read API key from environment file if it exists.
+start_pre() {
+    if [ -f /etc/hivebox/env ]; then
+        . /etc/hivebox/env
+        export HIVEBOX_API_KEY
+    fi
+
+    # Ensure required directories exist.
+    checkpath -d -m 0755 /var/lib/hivebox
+    checkpath -d -m 0755 /var/lib/hivebox/images
+    checkpath -d -m 0755 /var/lib/hivebox/sandboxes
+    checkpath -d -m 0755 /var/lib/hivebox/network
+    checkpath -d -m 0755 /var/log
+}
+
+depend() {
+    need net
+    after firewall
+}

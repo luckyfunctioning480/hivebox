@@ -1,0 +1,31 @@
+{
+  "description": "HiveBox strict seccomp profile — minimal syscalls for pure computation",
+  "defaultAction": "SCMP_ACT_ERRNO",
+  "architectures": ["SCMP_ARCH_X86_64"],
+  "syscalls": [
+    {
+      "names": [
+        "read", "write", "open", "openat", "close",
+        "stat", "fstat", "lstat", "newfstatat",
+        "lseek", "pread64", "pwrite64", "readv", "writev",
+        "access", "faccessat",
+        "fcntl", "getdents64", "getcwd",
+        "readlink", "readlinkat",
+        "dup", "dup2", "dup3",
+        "mmap", "mprotect", "munmap", "brk", "mremap", "madvise",
+        "execve", "exit", "exit_group",
+        "getpid", "gettid", "getuid", "getgid", "geteuid", "getegid",
+        "set_tid_address", "set_robust_list", "futex",
+        "arch_prctl", "prctl", "rseq",
+        "rt_sigaction", "rt_sigprocmask", "rt_sigreturn", "sigaltstack",
+        "clock_gettime", "clock_getres", "gettimeofday",
+        "nanosleep", "clock_nanosleep",
+        "getrandom", "uname", "sysinfo",
+        "prlimit64", "getrlimit", "ioctl",
+        "close_range",
+        "pipe", "pipe2", "poll", "sched_yield"
+      ],
+      "action": "SCMP_ACT_ALLOW"
+    }
+  ]
+}

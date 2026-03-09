@@ -1,0 +1,905 @@
+//! Sandbox lifecycle manager.
+//!
+//! The `SandboxManager` is the central orchestrator for persistent sandboxes.
+//! Unlike one-shot mode (`hivebox run`), persistent sandboxes stay alive between
+//! commands: create → exec → exec → ... → destroy.
+//!
+//! # Key design: init process
+//!
+//! Each persistent sandbox has a minimal "init" process (PID 1 inside the namespace)
+//! that just sleeps forever. This keeps the namespaces alive. Commands are executed
+//! by entering the existing namespaces via `nsenter`/`setns` and spawning a new process.
+
+use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::process::Command;
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
+
+use anyhow::{bail, Context, Result};
+use serde::Serialize;
+use tokio::sync::RwLock;
+use tracing::{debug, error, info, warn};
+
+use super::cgroup::CgroupManager;
+use super::filesystem::{cleanup_rootfs, prepare_rootfs};
+use super::network::{self, NetworkInfo};
+use super::{resolve_sandbox_id, SandboxConfig, SandboxState};
+
+/// Maximum sandbox lifetime in seconds (24 hours).
+const MAX_SANDBOX_LIFETIME: u64 = 24 * 60 * 60;
+
+/// Default sandbox timeout in seconds if not specified.
+const DEFAULT_TIMEOUT: u64 = 3600;
+
+/// How often the reaper checks for expired sandboxes.
+const REAPER_INTERVAL: u64 = 30;
+
+/// How often metrics are sampled (seconds).
+const METRICS_INTERVAL: u64 = 5;
+
+/// Maximum number of history samples to keep (4320 = 6 hours at 5s interval).
+const METRICS_HISTORY_MAX: usize = 4320;
+
+/// Per-sandbox metric within a sample.
+#[derive(Debug, Clone, Serialize)]
+pub struct SandboxMetric {
+    pub id: String,
+    pub memory_bytes: u64,
+    pub cpu_usec: u64,
+    pub pids: u64,
+}
+
+/// A single metrics sample.
+#[derive(Debug, Clone, Serialize)]
+pub struct MetricsSample {
+    pub timestamp: u64,
+    pub total_memory_bytes: u64,
+    pub total_cpu_usec: u64,
+    pub total_pids: u64,
+    pub sandbox_count: usize,
+    pub sandboxes: Vec<SandboxMetric>,
+    /// Host/container-level metrics from /proc.
+    pub host_memory_total: u64,
+    pub host_memory_used: u64,
+    pub host_cpu_percent: f64,
+}
+
+/// Server-side analytics history.
+#[derive(Debug, Clone, Serialize)]
+pub struct AnalyticsHistory {
+    pub samples: Vec<MetricsSample>,
+    pub interval_secs: u64,
+}
+
+/// A persistent sandbox managed by the SandboxManager.
+struct ManagedSandbox {
+    id: String,
+    state: SandboxState,
+    config: SandboxConfig,
+    init_pid: Option<i32>,
+    created_at: Instant,
+    created_at_str: String,
+    expires_at: Instant,
+    expires_at_str: String,
+    network_info: Option<NetworkInfo>,
+    rootfs_path: Option<PathBuf>,
+    cwd: String,
+    commands_executed: u64,
+    /// Accumulated CPU microseconds from completed exec commands.
+    /// Added to live namespace CPU to avoid losing short-lived command contributions.
+    cumulative_cpu_usec: u64,
+}
+
+/// Public snapshot of sandbox state (for API responses).
+#[derive(Debug, Clone)]
+pub struct SandboxInfo {
+    pub id: String,
+    pub state: SandboxState,
+    pub image: String,
+    pub created_at: String,
+    pub expires_at: String,
+    pub uptime_seconds: u64,
+    pub ttl_seconds: u64,
+    pub network_mode: String,
+    pub network_ip: Option<String>,
+    pub memory_limit: String,
+    pub cpu_limit: f64,
+    pub pid_limit: u64,
+    pub commands_executed: u64,
+    pub memory_usage_bytes: u64,
+    pub pid_current: u64,
+    pub cpu_usage_usec: u64,
+}
+
+/// Thread-safe sandbox lifecycle manager.
+pub struct SandboxManager {
+    sandboxes: RwLock<HashMap<String, ManagedSandbox>>,
+    metrics_history: RwLock<VecDeque<MetricsSample>>,
+    /// Previous CPU jiffies snapshot for calculating CPU%.
+    prev_cpu: RwLock<Option<(u64, u64)>>, // (total_jiffies, idle_jiffies)
+}
+
+impl SandboxManager {
+    pub fn new() -> Self {
+        Self {
+            sandboxes: RwLock::new(HashMap::new()),
+            metrics_history: RwLock::new(VecDeque::with_capacity(METRICS_HISTORY_MAX + 1)),
+            prev_cpu: RwLock::new(None),
+        }
+    }
+
+    /// Creates a new persistent sandbox.
+    pub async fn create(
+        &self,
+        config: SandboxConfig,
+        timeout_secs: u64,
+    ) -> Result<String> {
+        let sandbox_id = resolve_sandbox_id(config.name.as_deref());
+
+        if self.sandboxes.read().await.contains_key(&sandbox_id) {
+            bail!("sandbox '{}' already exists", sandbox_id);
+        }
+
+        let timeout = if timeout_secs == 0 {
+            DEFAULT_TIMEOUT
+        } else {
+            timeout_secs.min(MAX_SANDBOX_LIFETIME)
+        };
+
+        info!(
+            sandbox = sandbox_id,
+            image = config.image,
+            timeout_secs = timeout,
+            "creating persistent sandbox"
+        );
+
+        let rootfs_path = prepare_rootfs(&sandbox_id, &config.image)
+            .context("failed to prepare rootfs")?;
+
+        let init_pid = spawn_init_process(&sandbox_id, &rootfs_path, &config)?;
+
+        let cgroup = CgroupManager::create(&sandbox_id)?;
+        cgroup.apply_limits(&config.limits)?;
+        cgroup.add_process(nix::unistd::Pid::from_raw(init_pid))?;
+
+        let network_info = match network::setup_network(
+            &sandbox_id,
+            &config.network,
+            nix::unistd::Pid::from_raw(init_pid),
+        ) {
+            Ok(info) => Some(info),
+            Err(e) => {
+                warn!(sandbox = sandbox_id, error = %e, "network setup failed");
+                None
+            }
+        };
+
+        if config.network != network::NetworkMode::None {
+            let resolv_dst = rootfs_path.join("etc/resolv.conf");
+            let _ = std::fs::write(&resolv_dst, "nameserver 8.8.8.8\nnameserver 1.1.1.1\n");
+        }
+
+        let now = Instant::now();
+        let now_sys = SystemTime::now();
+        let expires_at = now + Duration::from_secs(timeout);
+
+        let sandbox = ManagedSandbox {
+            id: sandbox_id.clone(),
+            state: SandboxState::Running,
+            config,
+            init_pid: Some(init_pid),
+            created_at: now,
+            created_at_str: format_system_time(now_sys),
+            expires_at,
+            expires_at_str: format_system_time(now_sys + Duration::from_secs(timeout)),
+            network_info,
+            rootfs_path: Some(rootfs_path),
+            cwd: "/workspace".to_string(),
+            commands_executed: 0,
+            cumulative_cpu_usec: 0,
+        };
+
+        self.sandboxes.write().await.insert(sandbox_id.clone(), sandbox);
+
+        info!(sandbox = sandbox_id, "sandbox created successfully");
+
+        Ok(sandbox_id)
+    }
+
+    /// Executes a command inside an existing sandbox.
+    pub async fn exec(
+        &self,
+        sandbox_id: &str,
+        command: &str,
+    ) -> Result<crate::runtime::ExecResult> {
+        let (init_pid, rootfs_path, cwd, limits) = {
+            let sandboxes = self.sandboxes.read().await;
+            let sandbox = sandboxes.get(sandbox_id).ok_or_else(|| {
+                anyhow::anyhow!("sandbox '{}' not found", sandbox_id)
+            })?;
+
+            if sandbox.state != SandboxState::Running {
+                bail!("sandbox '{}' is not running (state: {:?})", sandbox_id, sandbox.state);
+            }
+
+            let pid = sandbox.init_pid.ok_or_else(|| {
+                anyhow::anyhow!("sandbox '{}' has no init process", sandbox_id)
+            })?;
+            let rootfs = sandbox.rootfs_path.clone().ok_or_else(|| {
+                anyhow::anyhow!("sandbox '{}' has no rootfs path", sandbox_id)
+            })?;
+            (pid, rootfs, sandbox.cwd.clone(), sandbox.config.limits.clone())
+        };
+
+        debug!(sandbox = sandbox_id, cwd, command, "executing command");
+
+        const CWD_MARKER: &str = "__HIVEBOX_CWD__";
+        let rootfs_str = rootfs_path.display().to_string();
+
+        // Enforce resource limits via ulimit (works even when cgroup controllers
+        // aren't delegated, e.g. inside Docker). This is a defense-in-depth
+        // measure — cgroup limits are still set if available.
+        let mem_kb = limits.memory_bytes / 1024;
+        let nproc = limits.max_pids;
+        // ulimit -v = virtual memory (kB), -u = max user processes, -t = CPU time (seconds)
+        let cpu_secs = 3600; // 1 hour max CPU time per command
+        let wrapped = format!(
+            "ulimit -v {mem_kb} 2>/dev/null; ulimit -u {nproc} 2>/dev/null; ulimit -t {cpu_secs} 2>/dev/null; cd {cwd} 2>/dev/null; {command}; echo {CWD_MARKER}$(pwd)"
+        );
+        let start = std::time::Instant::now();
+        let child = Command::new("nsenter")
+            .args([
+                &format!("--target={init_pid}"),
+                "--pid",
+                "--uts",
+                "--ipc",
+                "--net",
+                "--",
+                "chroot",
+                &rootfs_str,
+                "/bin/sh",
+                "-c",
+                &wrapped,
+            ])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .with_context(|| format!("failed to nsenter sandbox {sandbox_id}"))?;
+
+        // Add the nsenter process (and its children) to the sandbox's cgroup
+        // so resource usage is tracked correctly.
+        if let Ok(cg) = CgroupManager::open(sandbox_id) {
+            let _ = cg.add_process(nix::unistd::Pid::from_raw(child.id() as i32));
+        }
+
+        // Snapshot namespace CPU before command for delta tracking.
+        let cpu_before = cpu_from_namespace(init_pid);
+
+        let output = child
+            .wait_with_output()
+            .with_context(|| format!("failed to wait for nsenter in sandbox {sandbox_id}"))?;
+
+        // After the command finishes, measure CPU delta from the command.
+        // The nsenter'd process is gone, but we can compute the delta
+        // from the namespace snapshot (which included it while running).
+        let cpu_after = cpu_from_namespace(init_pid);
+        // The command's CPU contribution: if cpu_after < cpu_before it means
+        // the process exited and its CPU time is no longer visible, so we
+        // estimate from wall time as a fallback.
+        let duration_ms = start.elapsed().as_millis() as u64;
+        let cmd_cpu_usec = if cpu_after >= cpu_before {
+            cpu_after - cpu_before
+        } else {
+            // Process exited — its /proc entry is gone. Use duration as rough estimate.
+            duration_ms * 1000
+        };
+
+        let exit_code = output.status.code().unwrap_or(-1);
+        let raw_stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+        let (clean_stdout, new_cwd) = if let Some(pos) = raw_stdout.rfind(CWD_MARKER) {
+            let before = &raw_stdout[..pos];
+            let after = raw_stdout[pos + CWD_MARKER.len()..].trim();
+            (before.to_string(), Some(after.to_string()))
+        } else {
+            (raw_stdout, None)
+        };
+
+        {
+            let mut sandboxes = self.sandboxes.write().await;
+            if let Some(s) = sandboxes.get_mut(sandbox_id) {
+                s.commands_executed += 1;
+                s.cumulative_cpu_usec += cmd_cpu_usec;
+                if let Some(ref new) = new_cwd {
+                    s.cwd = new.clone();
+                }
+            }
+        }
+
+        Ok(crate::runtime::ExecResult {
+            exit_code,
+            stdout: clean_stdout,
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            duration_ms,
+            cwd: new_cwd,
+        })
+    }
+
+    /// Destroys a sandbox, cleaning up all resources.
+    pub async fn destroy(&self, sandbox_id: &str) -> Result<()> {
+        let sandbox = self.sandboxes.write().await.remove(sandbox_id);
+
+        let sandbox = sandbox.ok_or_else(|| {
+            anyhow::anyhow!("sandbox '{}' not found", sandbox_id)
+        })?;
+
+        info!(sandbox = sandbox_id, "destroying sandbox");
+        destroy_sandbox_resources(&sandbox);
+
+        Ok(())
+    }
+
+    /// Gets information about a sandbox.
+    pub async fn get(&self, sandbox_id: &str) -> Option<SandboxInfo> {
+        let sandboxes = self.sandboxes.read().await;
+        sandboxes.get(sandbox_id).map(sandbox_to_info)
+    }
+
+    /// Lists all sandboxes.
+    pub async fn list(&self) -> Vec<SandboxInfo> {
+        let sandboxes = self.sandboxes.read().await;
+        sandboxes.values().map(sandbox_to_info).collect()
+    }
+
+    /// Writes a file into a sandbox's filesystem.
+    pub async fn write_file(
+        &self,
+        sandbox_id: &str,
+        path: &str,
+        content: &[u8],
+    ) -> Result<()> {
+        let sandboxes = self.sandboxes.read().await;
+        let sandbox = sandboxes.get(sandbox_id).ok_or_else(|| {
+            anyhow::anyhow!("sandbox '{}' not found", sandbox_id)
+        })?;
+
+        let rootfs = sandbox.rootfs_path.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("sandbox has no rootfs")
+        })?;
+
+        let full_path = rootfs.join(path.trim_start_matches('/'));
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&full_path, content)?;
+
+        Ok(())
+    }
+
+    /// Reads a file from a sandbox's filesystem.
+    pub async fn read_file(
+        &self,
+        sandbox_id: &str,
+        path: &str,
+    ) -> Result<Vec<u8>> {
+        let sandboxes = self.sandboxes.read().await;
+        let sandbox = sandboxes.get(sandbox_id).ok_or_else(|| {
+            anyhow::anyhow!("sandbox '{}' not found", sandbox_id)
+        })?;
+
+        let rootfs = sandbox.rootfs_path.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("sandbox has no rootfs")
+        })?;
+
+        let full_path = rootfs.join(path.trim_start_matches('/'));
+        let content = std::fs::read(&full_path)
+            .with_context(|| format!("failed to read {}", full_path.display()))?;
+
+        Ok(content)
+    }
+
+    /// Background task that periodically destroys expired sandboxes.
+    pub async fn run_reaper(self: &Arc<Self>) {
+        loop {
+            tokio::time::sleep(Duration::from_secs(REAPER_INTERVAL)).await;
+
+            let expired: Vec<String> = {
+                let sandboxes = self.sandboxes.read().await;
+                let now = Instant::now();
+                sandboxes
+                    .values()
+                    .filter(|s| now >= s.expires_at)
+                    .map(|s| s.id.clone())
+                    .collect()
+            };
+
+            for id in expired {
+                warn!(sandbox = id, "sandbox expired, auto-destroying");
+                if let Err(e) = self.destroy(&id).await {
+                    error!(sandbox = id, error = %e, "failed to auto-destroy expired sandbox");
+                }
+            }
+        }
+    }
+
+    /// Background task that samples metrics every METRICS_INTERVAL seconds.
+    pub async fn run_metrics_collector(self: &Arc<Self>) {
+        loop {
+            tokio::time::sleep(Duration::from_secs(METRICS_INTERVAL)).await;
+
+            let sandboxes = self.sandboxes.read().await;
+            let mut total_mem: u64 = 0;
+            let mut total_cpu: u64 = 0;
+            let mut total_pids: u64 = 0;
+            let count = sandboxes.len();
+            let mut per_sandbox = Vec::new();
+
+            for s in sandboxes.values() {
+                // Memory: try cgroup, then cgroup.procs, then PID namespace scan.
+                let cg = CgroupManager::open(&s.id).ok();
+                let mut mem = cg.as_ref().and_then(|c| c.memory_usage().ok()).unwrap_or(0);
+                if mem == 0 {
+                    mem = memory_from_cgroup_procs(&s.id);
+                }
+                if mem == 0 {
+                    if let Some(pid) = s.init_pid {
+                        mem = memory_from_namespace(pid);
+                    }
+                }
+                // CPU: try cgroup, then PID namespace scan; take the max.
+                // Add cumulative CPU from completed commands that are no longer visible.
+                let mut cpu = cg.as_ref().and_then(|c| c.cpu_usage_usec().ok()).unwrap_or(0);
+                if let Some(pid) = s.init_pid {
+                    let ns_cpu = cpu_from_namespace(pid);
+                    if ns_cpu > cpu {
+                        cpu = ns_cpu;
+                    }
+                }
+                cpu += s.cumulative_cpu_usec;
+                // PIDs: try cgroup, then PID namespace scan; take the max.
+                let mut pids = cg.as_ref().and_then(|c| c.pid_count().ok()).unwrap_or(0);
+                if let Some(pid) = s.init_pid {
+                    let ns_pids = count_namespace_pids(pid);
+                    if ns_pids > pids {
+                        pids = ns_pids;
+                    }
+                }
+                total_mem += mem;
+                total_cpu += cpu;
+                total_pids += pids;
+                per_sandbox.push(SandboxMetric {
+                    id: s.id.clone(),
+                    memory_bytes: mem,
+                    cpu_usec: cpu,
+                    pids,
+                });
+            }
+            drop(sandboxes);
+
+            // Host-level metrics.
+            let (host_mem_total, host_mem_used) = read_host_memory();
+            let host_cpu_pct = {
+                let cur = read_cpu_jiffies();
+                let mut prev = self.prev_cpu.write().await;
+                let pct = match (*prev, cur) {
+                    (Some((prev_total, prev_idle)), Some((cur_total, cur_idle))) => {
+                        let dt = cur_total.saturating_sub(prev_total) as f64;
+                        let di = cur_idle.saturating_sub(prev_idle) as f64;
+                        if dt > 0.0 { ((dt - di) / dt) * 100.0 } else { 0.0 }
+                    }
+                    _ => 0.0,
+                };
+                *prev = cur;
+                pct
+            };
+
+            let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
+            let sample = MetricsSample {
+                timestamp: now,
+                total_memory_bytes: total_mem,
+                total_cpu_usec: total_cpu,
+                total_pids,
+                sandbox_count: count,
+                sandboxes: per_sandbox,
+                host_memory_total: host_mem_total,
+                host_memory_used: host_mem_used,
+                host_cpu_percent: host_cpu_pct,
+            };
+
+            let mut history = self.metrics_history.write().await;
+            history.push_back(sample);
+            if history.len() > METRICS_HISTORY_MAX {
+                history.pop_front();
+            }
+        }
+    }
+
+    /// Returns the analytics history, optionally filtered by time range in seconds.
+    pub async fn get_analytics(&self, range_secs: Option<u64>) -> AnalyticsHistory {
+        let history = self.metrics_history.read().await;
+        let samples: Vec<MetricsSample> = match range_secs {
+            Some(range) => {
+                let now = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let cutoff = now.saturating_sub(range);
+                history.iter().filter(|s| s.timestamp >= cutoff).cloned().collect()
+            }
+            None => history.iter().cloned().collect(),
+        };
+        AnalyticsHistory {
+            samples,
+            interval_secs: METRICS_INTERVAL,
+        }
+    }
+}
+
+/// Spawns a minimal init process inside new namespaces.
+fn spawn_init_process(
+    sandbox_id: &str,
+    rootfs: &std::path::Path,
+    _config: &SandboxConfig,
+) -> Result<i32> {
+    let workspace_dir = rootfs.join("workspace");
+    let _ = std::fs::create_dir_all(&workspace_dir);
+
+    let child = Command::new("unshare")
+        .args([
+            "--pid",
+            "--mount",
+            "--uts",
+            "--ipc",
+            "--net",
+            "--fork",
+            &format!("--root={}", rootfs.display()),
+            "/bin/sh",
+            "-c",
+            "mount -t proc proc /proc 2>/dev/null; mount -t devtmpfs devtmpfs /dev 2>/dev/null || { mkdir -p /dev; mknod -m 666 /dev/null c 1 3 2>/dev/null; mknod -m 666 /dev/zero c 1 5 2>/dev/null; mknod -m 666 /dev/urandom c 1 9 2>/dev/null; mknod -m 666 /dev/random c 1 8 2>/dev/null; mknod -m 666 /dev/tty c 5 0 2>/dev/null; }; mkdir -p /workspace; exec sleep infinity",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .with_context(|| format!("failed to spawn init for sandbox {sandbox_id}"))?;
+
+    let unshare_pid = child.id() as i32;
+
+    let init_pid = {
+        let mut child_pid = None;
+        for _ in 0..50 {
+            let children_path = format!("/proc/{unshare_pid}/task/{unshare_pid}/children");
+            if let Ok(contents) = std::fs::read_to_string(&children_path) {
+                let trimmed = contents.trim();
+                if !trimmed.is_empty() {
+                    if let Some(first) = trimmed.split_whitespace().next() {
+                        if let Ok(pid) = first.parse::<i32>() {
+                            child_pid = Some(pid);
+                            break;
+                        }
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        child_pid.unwrap_or(unshare_pid)
+    };
+
+    info!(
+        sandbox = sandbox_id,
+        init_pid,
+        unshare_pid,
+        rootfs = %rootfs.display(),
+        "init process spawned"
+    );
+
+    Ok(init_pid)
+}
+
+/// Cleans up all resources for a sandbox.
+fn destroy_sandbox_resources(sandbox: &ManagedSandbox) {
+    if let Some(pid) = sandbox.init_pid {
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    if let Ok(cgroup) = CgroupManager::create(&sandbox.id) {
+        let _ = cgroup.kill_all();
+        std::thread::sleep(Duration::from_millis(50));
+        let _ = cgroup.cleanup();
+    }
+
+    if let Some(ref net_info) = sandbox.network_info {
+        let _ = network::cleanup_network(&sandbox.id, net_info);
+    }
+
+    let _ = cleanup_rootfs(&sandbox.id);
+
+    info!(sandbox = sandbox.id, "sandbox resources cleaned up");
+}
+
+/// Converts a ManagedSandbox to a public SandboxInfo.
+fn sandbox_to_info(s: &ManagedSandbox) -> SandboxInfo {
+    let now = Instant::now();
+    let ttl = if s.expires_at > now {
+        (s.expires_at - now).as_secs()
+    } else {
+        0
+    };
+
+    let (mem_usage, pid_cur, cpu_usec) = {
+        let cg = CgroupManager::open(&s.id).ok();
+        let mut mem = cg.as_ref().and_then(|c| c.memory_usage().ok()).unwrap_or(0);
+        if mem == 0 {
+            mem = memory_from_cgroup_procs(&s.id);
+        }
+        if mem == 0 {
+            if let Some(pid) = s.init_pid {
+                mem = memory_from_namespace(pid);
+            }
+        }
+        let mut pids = cg.as_ref().and_then(|c| c.pid_count().ok()).unwrap_or(0);
+        if let Some(pid) = s.init_pid {
+            let ns_pids = count_namespace_pids(pid);
+            if ns_pids > pids { pids = ns_pids; }
+        }
+        let mut cpu = cg.as_ref().and_then(|c| c.cpu_usage_usec().ok()).unwrap_or(0);
+        if let Some(pid) = s.init_pid {
+            let ns_cpu = cpu_from_namespace(pid);
+            if ns_cpu > cpu { cpu = ns_cpu; }
+        }
+        cpu += s.cumulative_cpu_usec;
+        (mem, pids, cpu)
+    };
+
+    SandboxInfo {
+        id: s.id.clone(),
+        state: s.state,
+        image: s.config.image.clone(),
+        created_at: s.created_at_str.clone(),
+        expires_at: s.expires_at_str.clone(),
+        uptime_seconds: s.created_at.elapsed().as_secs(),
+        ttl_seconds: ttl,
+        network_mode: s.config.network.to_string(),
+        network_ip: s.network_info.as_ref().and_then(|n| n.ip.clone()),
+        memory_limit: format_bytes(s.config.limits.memory_bytes),
+        cpu_limit: s.config.limits.cpu_fraction,
+        pid_limit: s.config.limits.max_pids,
+        commands_executed: s.commands_executed,
+        memory_usage_bytes: mem_usage,
+        pid_current: pid_cur,
+        cpu_usage_usec: cpu_usec,
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const MB: u64 = 1024 * 1024;
+    const GB: u64 = 1024 * MB;
+
+    if bytes >= GB {
+        format!("{:.1}G", bytes as f64 / GB as f64)
+    } else {
+        format!("{}M", bytes / MB)
+    }
+}
+
+/// Reads RSS memory of all processes in a sandbox's cgroup via /proc/{pid}/statm.
+/// Fallback for when the cgroup memory controller isn't delegated (e.g. inside Docker).
+fn memory_from_cgroup_procs(sandbox_id: &str) -> u64 {
+    let procs_path = format!("/sys/fs/cgroup/hivebox/{sandbox_id}/cgroup.procs");
+    let content: String = match std::fs::read_to_string(&procs_path) {
+        Ok(c) => c,
+        Err(_) => return 0,
+    };
+
+    let page_size: u64 = 4096;
+    let mut total_rss: u64 = 0;
+
+    for line in content.lines() {
+        let pid = match line.trim().parse::<u32>() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let statm_path = format!("/proc/{pid}/statm");
+        if let Ok(statm) = std::fs::read_to_string(&statm_path) {
+            // statm format: size resident shared text lib data dt (all in pages)
+            let fields: Vec<&str> = statm.split_whitespace().collect();
+            if fields.len() >= 2 {
+                if let Ok(rss_pages) = fields[1].parse::<u64>() {
+                    total_rss += rss_pages * page_size;
+                }
+            }
+        }
+    }
+    total_rss
+}
+
+/// Finds all host PIDs that share the same PID namespace as init_pid.
+/// This catches nsenter'd processes which are NOT children of init_pid in the
+/// host process tree — they're children of the hivebox server but they entered
+/// the sandbox's PID namespace via setns().
+fn pids_in_namespace(init_pid: i32) -> Vec<i32> {
+    let ns_path = format!("/proc/{init_pid}/ns/pid");
+    let target_ns = match std::fs::read_link(&ns_path) {
+        Ok(ns) => ns,
+        Err(_) => return vec![init_pid],
+    };
+
+    let mut result = Vec::new();
+    let proc_dir = match std::fs::read_dir("/proc") {
+        Ok(d) => d,
+        Err(_) => return vec![init_pid],
+    };
+
+    for entry in proc_dir.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if let Ok(pid) = name_str.parse::<i32>() {
+            let pid_ns = format!("/proc/{pid}/ns/pid");
+            if let Ok(ns) = std::fs::read_link(&pid_ns) {
+                if ns == target_ns {
+                    result.push(pid);
+                }
+            }
+        }
+    }
+
+    if result.is_empty() {
+        result.push(init_pid);
+    }
+    result
+}
+
+/// Reads RSS memory of all processes in the same PID namespace as init_pid.
+fn memory_from_namespace(init_pid: i32) -> u64 {
+    let page_size: u64 = 4096;
+    let mut total_rss: u64 = 0;
+
+    for pid in pids_in_namespace(init_pid) {
+        let statm_path = format!("/proc/{pid}/statm");
+        if let Ok(statm) = std::fs::read_to_string(&statm_path) {
+            let fields: Vec<&str> = statm.split_whitespace().collect();
+            if fields.len() >= 2 {
+                if let Ok(rss_pages) = fields[1].parse::<u64>() {
+                    total_rss += rss_pages * page_size;
+                }
+            }
+        }
+    }
+    total_rss
+}
+
+/// Reads cumulative CPU time (utime + stime) from all processes in the same
+/// PID namespace as init_pid. Returns total in microseconds.
+fn cpu_from_namespace(init_pid: i32) -> u64 {
+    let ticks_per_sec: u64 = 100;
+    let mut total_usec: u64 = 0;
+
+    for pid in pids_in_namespace(init_pid) {
+        let stat_path = format!("/proc/{pid}/stat");
+        if let Ok(stat) = std::fs::read_to_string(&stat_path) {
+            if let Some(after_comm) = stat.rfind(')') {
+                let fields: Vec<&str> = stat[after_comm + 2..].split_whitespace().collect();
+                if fields.len() > 12 {
+                    let utime = fields[11].parse::<u64>().unwrap_or(0);
+                    let stime = fields[12].parse::<u64>().unwrap_or(0);
+                    total_usec += (utime + stime) * 1_000_000 / ticks_per_sec;
+                }
+            }
+        }
+    }
+    total_usec
+}
+
+/// Counts processes in the same PID namespace as init_pid.
+fn count_namespace_pids(init_pid: i32) -> u64 {
+    pids_in_namespace(init_pid).len() as u64
+}
+
+/// Reads host/container memory from /proc/meminfo.
+/// Returns (total_bytes, used_bytes).
+fn read_host_memory() -> (u64, u64) {
+    let content: String = match std::fs::read_to_string("/proc/meminfo") {
+        Ok(c) => c,
+        Err(_) => return (0, 0),
+    };
+
+    let mut total: u64 = 0;
+    let mut available: u64 = 0;
+
+    for line in content.lines() {
+        if let Some(val) = line.strip_prefix("MemTotal:") {
+            total = parse_meminfo_kb(val) * 1024;
+        } else if let Some(val) = line.strip_prefix("MemAvailable:") {
+            available = parse_meminfo_kb(val) * 1024;
+        }
+    }
+    (total, total.saturating_sub(available))
+}
+
+fn parse_meminfo_kb(s: &str) -> u64 {
+    s.trim().trim_end_matches("kB").trim().parse::<u64>().unwrap_or(0)
+}
+
+/// Reads CPU jiffies from /proc/stat.
+/// Returns Some((total_jiffies, idle_jiffies)).
+fn read_cpu_jiffies() -> Option<(u64, u64)> {
+    let content: String = std::fs::read_to_string("/proc/stat").ok()?;
+    let first_line = content.lines().next()?;
+    if !first_line.starts_with("cpu ") {
+        return None;
+    }
+    let fields: Vec<u64> = first_line[4..]
+        .split_whitespace()
+        .filter_map(|f| f.parse::<u64>().ok())
+        .collect();
+    if fields.len() < 4 {
+        return None;
+    }
+    // fields: user, nice, system, idle, iowait, irq, softirq, steal, ...
+    let total: u64 = fields.iter().sum();
+    let idle = fields[3] + fields.get(4).copied().unwrap_or(0); // idle + iowait
+    Some((total, idle))
+}
+
+fn format_system_time(t: SystemTime) -> String {
+    let duration = t
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = duration.as_secs();
+
+    let days = secs / 86400;
+    let remaining = secs % 86400;
+    let hours = remaining / 3600;
+    let mins = (remaining % 3600) / 60;
+    let s = remaining % 60;
+
+    let mut year = 1970u64;
+    let mut day_count = days;
+    loop {
+        let days_in_year = if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+            366
+        } else {
+            365
+        };
+        if day_count < days_in_year {
+            break;
+        }
+        day_count -= days_in_year;
+        year += 1;
+    }
+
+    let months: &[u64] = if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+        &[31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        &[31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut month = 0u64;
+    for &m_days in months {
+        if day_count < m_days {
+            break;
+        }
+        day_count -= m_days;
+        month += 1;
+    }
+
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year,
+        month + 1,
+        day_count + 1,
+        hours,
+        mins,
+        s
+    )
+}

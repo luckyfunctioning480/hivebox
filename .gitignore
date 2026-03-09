@@ -1,0 +1,22 @@
+# Rust build artifacts
+/target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# HiveBox runtime data
+/var/lib/hivebox/
+*.squashfs
+
+# Logs
+*.log
+
+# Environment
+.env

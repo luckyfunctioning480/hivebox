@@ -1,0 +1,69 @@
+[package]
+name = "hivebox"
+version = "0.1.0"
+edition = "2021"
+description = "Lightweight native sandboxing on Alpine Linux using kernel primitives"
+license = "MIT"
+repository = "https://github.com/hivebox/hivebox"
+readme = "README.md"
+keywords = ["sandbox", "container", "linux", "namespace", "isolation"]
+categories = ["os", "command-line-utilities"]
+
+[dependencies]
+# Linux syscall wrappers (namespaces, mount, pivot_root, signals)
+nix = { version = "0.29", features = [
+    "sched",
+    "mount",
+    "process",
+    "signal",
+    "user",
+    "hostname",
+    "fs",
+    "resource",
+] }
+
+# CLI argument parsing with derive macros
+clap = { version = "4", features = ["derive", "env"] }
+
+# Serialization for config and API
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Structured async-aware logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Sandbox ID generation
+uuid = { version = "1", features = ["v4"] }
+
+# Raw syscall constants for anything nix doesn't wrap
+libc = "0.2"
+
+# Error handling
+anyhow = "1"
+
+# HTTP framework for REST API (Phase 4)
+axum = { version = "0.8", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# Base64 encoding/decoding for binary file transfer via MCP
+base64 = "0.22"
+
+# HTTP client for MCP server → daemon API bridge
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Seccomp-BPF syscall filtering (from rust-vmm)
+seccompiler = "0.4"
+
+# Landlock LSM filesystem access control
+landlock = "0.4"
+
+# Linux capabilities manipulation
+caps = "0.5"
+
+[profile.release]
+opt-level = "z"      # Optimize for size
+lto = true           # Link-time optimization for smaller binary
+strip = true         # Strip debug symbols
+codegen-units = 1    # Single codegen unit for better optimization

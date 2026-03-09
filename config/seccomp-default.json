@@ -1,0 +1,51 @@
+{
+  "description": "HiveBox default seccomp profile — allows ~80 common syscalls",
+  "defaultAction": "SCMP_ACT_ERRNO",
+  "architectures": ["SCMP_ARCH_X86_64"],
+  "syscalls": [
+    {
+      "names": [
+        "read", "write", "open", "openat", "close",
+        "stat", "fstat", "lstat", "newfstatat",
+        "lseek", "pread64", "pwrite64", "readv", "writev",
+        "access", "faccessat", "faccessat2",
+        "dup", "dup2", "dup3",
+        "fcntl", "flock", "fsync", "fdatasync",
+        "truncate", "ftruncate",
+        "getdents64", "getcwd", "chdir", "fchdir",
+        "rename", "renameat", "renameat2",
+        "mkdir", "mkdirat", "rmdir",
+        "link", "linkat", "unlink", "unlinkat",
+        "symlink", "symlinkat", "readlink", "readlinkat",
+        "chmod", "fchmod", "fchmodat",
+        "chown", "fchown", "fchownat",
+        "umask", "statfs", "fstatfs", "utimensat",
+        "mmap", "mprotect", "munmap", "brk", "mremap", "madvise", "membarrier",
+        "execve", "execveat", "exit", "exit_group",
+        "wait4", "waitid", "clone", "clone3", "fork", "vfork",
+        "getpid", "getppid", "gettid",
+        "getuid", "getgid", "geteuid", "getegid", "getgroups",
+        "setpgid", "getpgid", "getpgrp", "setsid",
+        "prctl", "arch_prctl", "set_tid_address",
+        "set_robust_list", "get_robust_list", "futex",
+        "sched_yield", "sched_getaffinity", "sched_setaffinity", "rseq",
+        "rt_sigaction", "rt_sigprocmask", "rt_sigreturn", "rt_sigsuspend",
+        "kill", "tgkill", "sigaltstack",
+        "socket", "connect", "accept", "accept4",
+        "bind", "listen", "sendto", "recvfrom",
+        "sendmsg", "recvmsg", "shutdown",
+        "getsockname", "getpeername", "setsockopt", "getsockopt", "socketpair",
+        "poll", "ppoll", "select", "pselect6",
+        "epoll_create1", "epoll_ctl", "epoll_wait", "epoll_pwait",
+        "eventfd2", "timerfd_create", "timerfd_settime", "timerfd_gettime", "signalfd4",
+        "pipe", "pipe2",
+        "clock_gettime", "clock_getres", "clock_nanosleep",
+        "gettimeofday", "nanosleep",
+        "getrandom", "ioctl", "uname", "sysinfo",
+        "prlimit64", "getrlimit", "setrlimit", "getrusage", "times",
+        "close_range", "copy_file_range", "sendfile", "splice", "tee"
+      ],
+      "action": "SCMP_ACT_ALLOW"
+    }
+  ]
+}

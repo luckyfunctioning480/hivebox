@@ -1,0 +1,75 @@
+# HiveBox configuration file.
+#
+# This file is read by `hivebox daemon` at startup.
+# Environment variables override these values. CLI flags override both.
+#
+# Copy this file to /etc/hivebox/hivebox.toml for production use.
+
+[server]
+# TCP port for the REST API.
+port = 7070
+
+# Bind address. Use "0.0.0.0" for remote access, "127.0.0.1" for local only.
+bind = "0.0.0.0"
+
+# API key for authentication. Set this in production!
+# Can also be set via HIVEBOX_API_KEY environment variable.
+# api_key = "your-secret-key-here"
+
+[sandbox]
+# Default image for new sandboxes.
+default_image = "base"
+
+# Default timeout in seconds (how long a sandbox lives without activity).
+default_timeout = 3600
+
+# Maximum sandbox lifetime in seconds. Hard cap — cannot be exceeded.
+max_lifetime = 86400  # 24 hours
+
+# How often the reaper checks for expired sandboxes (seconds).
+reaper_interval = 30
+
+[limits]
+# Default resource limits for new sandboxes.
+# These can be overridden per-sandbox in the API request or CLI flags.
+memory = "256m"
+cpus = 1.0
+pids = 64
+
+[network]
+# Default network mode: "none", "isolated", or "shared:groupname".
+default_mode = "none"
+
+# Bridge name for isolated-mode sandboxes.
+bridge_name = "hivebox0"
+
+# Subnet for sandbox IP allocation.
+subnet = "10.10.0.0/16"
+gateway = "10.10.0.1"
+
+[security]
+# Seccomp profile: "default", "strict", or "disabled".
+seccomp_profile = "default"
+
+# Enable Landlock filesystem restrictions (requires kernel 5.13+).
+landlock_enabled = true
+
+# Drop capabilities after sandbox setup.
+drop_capabilities = true
+
+[storage]
+# Base directory for HiveBox data.
+base_dir = "/var/lib/hivebox"
+
+# Directory where rootfs images are stored.
+images_dir = "/var/lib/hivebox/images"
+
+# Directory where sandbox working directories are created.
+sandboxes_dir = "/var/lib/hivebox/sandboxes"
+
+[logging]
+# Log level: "error", "warn", "info", "debug", "trace".
+level = "info"
+
+# Log format: "text" or "json".
+format = "text"
