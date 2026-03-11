@@ -54,10 +54,18 @@ pub struct CreateSandboxRequest {
     pub llm_model: Option<String>,
 }
 
-fn default_memory() -> String { "512m".to_string() }
-fn default_cpus() -> f64 { 1.0 }
-fn default_pids() -> u64 { 128 }
-fn default_timeout() -> u64 { 3600 }
+fn default_memory() -> String {
+    "512m".to_string()
+}
+fn default_cpus() -> f64 {
+    1.0
+}
+fn default_pids() -> u64 {
+    128
+}
+fn default_timeout() -> u64 {
+    3600
+}
 
 /// Response body for `POST /api/v1/hiveboxes`.
 #[derive(Debug, Serialize)]

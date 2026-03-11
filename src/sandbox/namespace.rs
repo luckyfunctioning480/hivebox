@@ -54,8 +54,8 @@ where
     // Create a pipe for parent -> child synchronization.
     // The child waits on the read end until the parent has set up UID/GID mappings.
     // nix 0.29+ returns OwnedFd, so we convert to raw FDs for use across clone().
-    let (pipe_read_fd, pipe_write_fd) = nix::unistd::pipe()
-        .context("failed to create synchronization pipe")?;
+    let (pipe_read_fd, pipe_write_fd) =
+        nix::unistd::pipe().context("failed to create synchronization pipe")?;
     let pipe_read_raw = pipe_read_fd.as_raw_fd();
     let pipe_write_raw = pipe_write_fd.as_raw_fd();
 
@@ -94,15 +94,8 @@ where
     // SAFETY: clone() is called with a heap-allocated stack and a boxed closure.
     // The child process gets its own address space (due to CLONE_NEWPID + CLONE_NEWNS),
     // so sharing the parent's memory is safe. The stack is large enough (8 MiB).
-    let child_pid = unsafe {
-        clone(
-            cb,
-            &mut stack,
-            CLONE_ALL_NS,
-            Some(Signal::SIGCHLD as i32),
-        )
-    }
-    .context("clone() failed — are user namespaces enabled in the kernel?")?;
+    let child_pid = unsafe { clone(cb, &mut stack, CLONE_ALL_NS, Some(Signal::SIGCHLD as i32)) }
+        .context("clone() failed — are user namespaces enabled in the kernel?")?;
 
     info!(pid = child_pid.as_raw(), "spawned child in new namespaces");
 
@@ -111,8 +104,7 @@ where
 
     // Set up UID/GID mappings so the child appears as root inside the namespace
     // but runs as our unprivileged user on the host.
-    setup_uid_gid_maps(child_pid)
-        .context("failed to configure UID/GID mappings")?;
+    setup_uid_gid_maps(child_pid).context("failed to configure UID/GID mappings")?;
 
     // Signal the child to proceed.
     let mut pipe_writer = unsafe { std::fs::File::from_raw_fd(pipe_write_raw) };
@@ -168,7 +160,10 @@ fn setup_uid_gid_maps(child_pid: Pid) -> Result<()> {
     )
     .context("failed to write gid_map")?;
 
-    info!(pid, "UID/GID maps configured: root inside -> unprivileged outside");
+    info!(
+        pid,
+        "UID/GID maps configured: root inside -> unprivileged outside"
+    );
     Ok(())
 }
 

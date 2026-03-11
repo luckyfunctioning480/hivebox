@@ -29,8 +29,8 @@
 
 use anyhow::{Context, Result};
 use landlock::{
-    Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr,
-    RulesetCreatedAttr, RulesetStatus, ABI,
+    Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus,
+    ABI,
 };
 use tracing::{info, warn};
 
@@ -82,10 +82,7 @@ pub fn apply_landlock_restrictions() -> Result<()> {
 pub fn apply_landlock_readonly() -> Result<()> {
     let abi = ABI::V5;
 
-    let read_access = AccessFs::Execute
-        | AccessFs::ReadFile
-        | AccessFs::ReadDir
-        | AccessFs::Refer;
+    let read_access = AccessFs::Execute | AccessFs::ReadFile | AccessFs::ReadDir | AccessFs::Refer;
 
     let write_access = AccessFs::from_all(abi);
 

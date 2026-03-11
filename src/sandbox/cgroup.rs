@@ -42,8 +42,8 @@ impl Default for ResourceLimits {
     fn default() -> Self {
         Self {
             memory_bytes: 512 * 1024 * 1024, // 512 MiB
-            cpu_fraction: 1.0,                // 1 full core
-            max_pids: 128,                    // 128 processes
+            cpu_fraction: 1.0,               // 1 full core
+            max_pids: 128,                   // 128 processes
         }
     }
 }
@@ -71,9 +71,8 @@ impl CgroupManager {
         ensure_parent_cgroup()?;
 
         // Create this sandbox's cgroup directory.
-        fs::create_dir_all(&path).with_context(|| {
-            format!("failed to create cgroup dir: {}", path.display())
-        })?;
+        fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create cgroup dir: {}", path.display()))?;
 
         info!(
             sandbox = sandbox_id,
@@ -216,7 +215,10 @@ impl CgroupManager {
         let content = self.read_file("cpu.stat")?;
         for line in content.lines() {
             if let Some(val) = line.strip_prefix("usage_usec ") {
-                return val.trim().parse::<u64>().context("failed to parse usage_usec");
+                return val
+                    .trim()
+                    .parse::<u64>()
+                    .context("failed to parse usage_usec");
             }
         }
         anyhow::bail!("usage_usec not found in cpu.stat")
@@ -229,7 +231,10 @@ impl CgroupManager {
         // cgroup.kill is the clean way (kernel 5.14+): writing "1" sends SIGKILL
         // to every process in the cgroup atomically.
         if self.write_file("cgroup.kill", "1").is_ok() {
-            info!(sandbox = self.sandbox_id, "killed all processes via cgroup.kill");
+            info!(
+                sandbox = self.sandbox_id,
+                "killed all processes via cgroup.kill"
+            );
             return Ok(());
         }
 
@@ -273,16 +278,14 @@ impl CgroupManager {
     /// Writes a value to a cgroup control file.
     fn write_file(&self, filename: &str, value: &str) -> Result<()> {
         let path = self.path.join(filename);
-        fs::write(&path, value).with_context(|| {
-            format!("failed to write '{}' to {}", value, path.display())
-        })
+        fs::write(&path, value)
+            .with_context(|| format!("failed to write '{}' to {}", value, path.display()))
     }
 
     /// Reads a cgroup control file.
     fn read_file(&self, filename: &str) -> Result<String> {
         let path = self.path.join(filename);
-        fs::read_to_string(&path)
-            .with_context(|| format!("failed to read {}", path.display()))
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))
     }
 }
 
@@ -294,8 +297,7 @@ fn ensure_parent_cgroup() -> Result<()> {
     let parent = PathBuf::from(HIVEBOX_CGROUP);
 
     if !parent.exists() {
-        fs::create_dir_all(&parent)
-            .context("failed to create /sys/fs/cgroup/hivebox")?;
+        fs::create_dir_all(&parent).context("failed to create /sys/fs/cgroup/hivebox")?;
     }
 
     // Enable controllers on the parent so child cgroups can use them.
@@ -332,7 +334,8 @@ pub fn parse_memory_size(s: &str) -> Result<u64> {
         let n: f64 = num.parse().context("invalid memory size")?;
         Ok((n * 1024.0) as u64)
     } else {
-        s.parse::<u64>().context("invalid memory size (expected number with optional k/m/g suffix)")
+        s.parse::<u64>()
+            .context("invalid memory size (expected number with optional k/m/g suffix)")
     }
 }
 

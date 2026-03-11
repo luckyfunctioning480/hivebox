@@ -101,7 +101,10 @@ pub fn parse_network_mode(s: &str) -> Result<NetworkMode> {
             }
             Ok(NetworkMode::Shared { group })
         }
-        _ => bail!("invalid network mode '{}' — use none, isolated, or shared:groupname", s),
+        _ => bail!(
+            "invalid network mode '{}' — use none, isolated, or shared:groupname",
+            s
+        ),
     }
 }
 
@@ -197,17 +200,32 @@ pub fn setup_network(sandbox_id: &str, mode: &NetworkMode, child_pid: Pid) -> Re
 
 /// Brings up the loopback interface inside a network namespace.
 fn bring_up_loopback(pid: Pid) -> Result<()> {
-    run_cmd("ip", &[
-        "netns", "exec",
-        &format!("/proc/{}/ns/net", pid.as_raw()),
-        "ip", "link", "set", "lo", "up",
-    ])
+    run_cmd(
+        "ip",
+        &[
+            "netns",
+            "exec",
+            &format!("/proc/{}/ns/net", pid.as_raw()),
+            "ip",
+            "link",
+            "set",
+            "lo",
+            "up",
+        ],
+    )
     // nsenter is more reliable than `ip netns exec` with a proc path.
     .or_else(|_| {
-        run_cmd("nsenter", &[
-            &format!("--net=/proc/{}/ns/net", pid.as_raw()),
-            "ip", "link", "set", "lo", "up",
-        ])
+        run_cmd(
+            "nsenter",
+            &[
+                &format!("--net=/proc/{}/ns/net", pid.as_raw()),
+                "ip",
+                "link",
+                "set",
+                "lo",
+                "up",
+            ],
+        )
     })
     .context("failed to bring up loopback in sandbox")?;
 
@@ -230,8 +248,11 @@ fn ensure_bridge(name: &str, gateway: &str) -> Result<()> {
         .with_context(|| format!("failed to create bridge {name}"))?;
 
     // Assign the gateway IP.
-    run_cmd("ip", &["addr", "add", &format!("{gateway}/16"), "dev", name])
-        .with_context(|| format!("failed to assign IP to bridge {name}"))?;
+    run_cmd(
+        "ip",
+        &["addr", "add", &format!("{gateway}/16"), "dev", name],
+    )
+    .with_context(|| format!("failed to assign IP to bridge {name}"))?;
 
     // Bring up the bridge.
     run_cmd("ip", &["link", "set", name, "up"])
@@ -245,12 +266,22 @@ fn ensure_bridge(name: &str, gateway: &str) -> Result<()> {
     // -A POSTROUTING: append to the postrouting chain
     // -s subnet: source address range
     // -j MASQUERADE: rewrite source IP to the host's outgoing IP
-    let _ = run_cmd("iptables", &[
-        "-t", "nat", "-A", "POSTROUTING",
-        "-s", DEFAULT_SUBNET,
-        "!", "-o", name,
-        "-j", "MASQUERADE",
-    ]);
+    let _ = run_cmd(
+        "iptables",
+        &[
+            "-t",
+            "nat",
+            "-A",
+            "POSTROUTING",
+            "-s",
+            DEFAULT_SUBNET,
+            "!",
+            "-o",
+            name,
+            "-j",
+            "MASQUERADE",
+        ],
+    );
 
     Ok(())
 }
@@ -273,11 +304,12 @@ fn setup_veth_pair(
     let veth_tmp = format!("vp-{}", &sandbox_id[..sandbox_id.len().min(6)]);
 
     // Create the veth pair on the host with a temporary peer name.
-    run_cmd("ip", &[
-        "link", "add", veth_host,
-        "type", "veth",
-        "peer", "name", &veth_tmp,
-    ])
+    run_cmd(
+        "ip",
+        &[
+            "link", "add", veth_host, "type", "veth", "peer", "name", &veth_tmp,
+        ],
+    )
     .with_context(|| format!("failed to create veth pair for sandbox {sandbox_id}"))?;
 
     // Attach the host end to the bridge.
@@ -285,8 +317,7 @@ fn setup_veth_pair(
         .context("failed to attach veth to bridge")?;
 
     // Bring up the host end.
-    run_cmd("ip", &["link", "set", veth_host, "up"])
-        .context("failed to bring up host veth")?;
+    run_cmd("ip", &["link", "set", veth_host, "up"]).context("failed to bring up host veth")?;
 
     // Move the sandbox end into the sandbox's network namespace.
     run_cmd("ip", &["link", "set", &veth_tmp, "netns", &pid_str])
@@ -297,45 +328,73 @@ fn setup_veth_pair(
 
     // Rename the temporary interface to the final name (e.g., "eth0")
     // inside the sandbox namespace where there's no conflict.
-    run_cmd("nsenter", &[
-        &format!("--net={ns_path}"),
-        "ip", "link", "set", &veth_tmp, "name", veth_sandbox,
-    ])
+    run_cmd(
+        "nsenter",
+        &[
+            &format!("--net={ns_path}"),
+            "ip",
+            "link",
+            "set",
+            &veth_tmp,
+            "name",
+            veth_sandbox,
+        ],
+    )
     .context("failed to rename veth inside sandbox")?;
 
     // Bring up loopback.
-    let _ = run_cmd("nsenter", &[
-        &format!("--net={ns_path}"),
-        "ip", "link", "set", "lo", "up",
-    ]);
+    let _ = run_cmd(
+        "nsenter",
+        &[&format!("--net={ns_path}"), "ip", "link", "set", "lo", "up"],
+    );
 
     // Assign IP address.
-    run_cmd("nsenter", &[
-        &format!("--net={ns_path}"),
-        "ip", "addr", "add", &format!("{ip}/16"), "dev", veth_sandbox,
-    ])
+    run_cmd(
+        "nsenter",
+        &[
+            &format!("--net={ns_path}"),
+            "ip",
+            "addr",
+            "add",
+            &format!("{ip}/16"),
+            "dev",
+            veth_sandbox,
+        ],
+    )
     .context("failed to assign IP inside sandbox")?;
 
     // Bring up the interface.
-    run_cmd("nsenter", &[
-        &format!("--net={ns_path}"),
-        "ip", "link", "set", veth_sandbox, "up",
-    ])
+    run_cmd(
+        "nsenter",
+        &[
+            &format!("--net={ns_path}"),
+            "ip",
+            "link",
+            "set",
+            veth_sandbox,
+            "up",
+        ],
+    )
     .context("failed to bring up eth0 inside sandbox")?;
 
     // Set default route via the bridge gateway.
-    run_cmd("nsenter", &[
-        &format!("--net={ns_path}"),
-        "ip", "route", "add", "default", "via", gateway,
-    ])
+    run_cmd(
+        "nsenter",
+        &[
+            &format!("--net={ns_path}"),
+            "ip",
+            "route",
+            "add",
+            "default",
+            "via",
+            gateway,
+        ],
+    )
     .context("failed to set default route inside sandbox")?;
 
     info!(
         sandbox = sandbox_id,
-        ip,
-        veth_host,
-        bridge,
-        "network configured"
+        ip, veth_host, bridge, "network configured"
     );
 
     Ok(())
@@ -368,8 +427,7 @@ fn allocate_ip(sandbox_id: &str) -> Result<String> {
 
     // Read current state or start from 10.10.0.2.
     let state: IpAllocState = if Path::new(IP_STATE_FILE).exists() {
-        let content = fs::read_to_string(IP_STATE_FILE)
-            .context("failed to read IP state")?;
+        let content = fs::read_to_string(IP_STATE_FILE).context("failed to read IP state")?;
         serde_json::from_str(&content).unwrap_or_default()
     } else {
         IpAllocState::default()
@@ -393,10 +451,9 @@ fn allocate_ip(sandbox_id: &str) -> Result<String> {
         .allocated
         .insert(sandbox_id.to_string(), ip.clone());
 
-    let content = serde_json::to_string_pretty(&new_state)
-        .context("failed to serialize IP state")?;
-    fs::write(IP_STATE_FILE, content)
-        .context("failed to write IP state")?;
+    let content =
+        serde_json::to_string_pretty(&new_state).context("failed to serialize IP state")?;
+    fs::write(IP_STATE_FILE, content).context("failed to write IP state")?;
 
     debug!(sandbox = sandbox_id, ip, "IP allocated");
     Ok(ip)
@@ -408,17 +465,13 @@ fn release_ip(sandbox_id: &str) -> Result<()> {
         return Ok(());
     }
 
-    let content = fs::read_to_string(IP_STATE_FILE)
-        .context("failed to read IP state")?;
-    let mut state: IpAllocState =
-        serde_json::from_str(&content).unwrap_or_default();
+    let content = fs::read_to_string(IP_STATE_FILE).context("failed to read IP state")?;
+    let mut state: IpAllocState = serde_json::from_str(&content).unwrap_or_default();
 
     state.allocated.remove(sandbox_id);
 
-    let content = serde_json::to_string_pretty(&state)
-        .context("failed to serialize IP state")?;
-    fs::write(IP_STATE_FILE, content)
-        .context("failed to write IP state")?;
+    let content = serde_json::to_string_pretty(&state).context("failed to serialize IP state")?;
+    fs::write(IP_STATE_FILE, content).context("failed to write IP state")?;
 
     Ok(())
 }

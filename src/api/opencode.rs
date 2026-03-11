@@ -66,7 +66,8 @@ pub async fn opencode_proxy(
         })?;
 
     // Build the proxied request.
-    let reqwest_method = reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
+    let reqwest_method =
+        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
 
     let mut proxy_req = client().request(reqwest_method, &target_url);
 
@@ -95,7 +96,8 @@ pub async fn opencode_proxy(
     })?;
 
     // Build the axum response, streaming the body through.
-    let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status =
+        StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let resp_headers = resp.headers().clone();
     let stream = resp.bytes_stream();
     let body = Body::from_stream(stream);

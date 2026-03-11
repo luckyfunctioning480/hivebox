@@ -39,8 +39,7 @@ impl PipePair {
     /// Converts nix's OwnedFd to raw FDs for manual lifetime management
     /// across fork/clone boundaries.
     pub fn new() -> Result<Self> {
-        let (read_fd, write_fd) =
-            nix::unistd::pipe().context("failed to create pipe")?;
+        let (read_fd, write_fd) = nix::unistd::pipe().context("failed to create pipe")?;
         // Convert OwnedFd to raw FDs — we manage lifetimes manually.
         Ok(Self {
             read_fd: read_fd.into_raw_fd(),
@@ -95,8 +94,7 @@ pub fn exec_command(command: &str) -> Result<()> {
 
     let sh = CString::new("/bin/sh").unwrap();
     let flag_c = CString::new("-c").unwrap();
-    let cmd = CString::new(command)
-        .context("command contains null bytes")?;
+    let cmd = CString::new(command).context("command contains null bytes")?;
 
     // execvp replaces the current process with /bin/sh -c "<command>".
     // On success, this never returns. On failure, we get an error.
@@ -123,12 +121,10 @@ pub fn collect_child_output(
     unsafe { libc::close(stderr_pipe.write_fd) };
 
     // Read all stdout from the pipe.
-    let stdout = read_pipe_to_string(stdout_pipe.read_fd)
-        .context("failed to read child stdout")?;
+    let stdout = read_pipe_to_string(stdout_pipe.read_fd).context("failed to read child stdout")?;
 
     // Read all stderr from the pipe.
-    let stderr = read_pipe_to_string(stderr_pipe.read_fd)
-        .context("failed to read child stderr")?;
+    let stderr = read_pipe_to_string(stderr_pipe.read_fd).context("failed to read child stderr")?;
 
     // Wait for the child process to exit and collect its status.
     let exit_code = match waitpid(child_pid, None) {

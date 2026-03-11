@@ -33,8 +33,8 @@ use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::Response;
-use axum::Router;
 use axum::routing::{any, delete, get, post, put};
+use axum::Router;
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -83,11 +83,17 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/hiveboxes", get(handlers::list_sandboxes))
         .route("/api/v1/hiveboxes/{id}", get(handlers::get_sandbox))
         .route("/api/v1/hiveboxes/{id}", delete(handlers::destroy_sandbox))
-        .route("/api/v1/hiveboxes/{id}/exec", post(handlers::exec_in_sandbox))
+        .route(
+            "/api/v1/hiveboxes/{id}/exec",
+            post(handlers::exec_in_sandbox),
+        )
         .route("/api/v1/hiveboxes/{id}/mcp", post(mcp::mcp_handler))
         .route("/api/v1/hiveboxes/{id}/files", put(handlers::upload_file))
         .route("/api/v1/hiveboxes/{id}/files", get(handlers::download_file))
-        .route("/api/v1/hiveboxes/{id}/opencode/{*rest}", any(opencode::opencode_proxy))
+        .route(
+            "/api/v1/hiveboxes/{id}/opencode/{*rest}",
+            any(opencode::opencode_proxy),
+        )
         .route("/api/v1/analytics", get(handlers::get_analytics))
         .route("/healthz", get(|| async { "ok" }))
         .route("/dashboard", get(dashboard::dashboard_page))
@@ -157,11 +163,17 @@ fn build_router_with_auth(state: AppState, api_key: String) -> Router {
         .route("/api/v1/hiveboxes", get(handlers::list_sandboxes))
         .route("/api/v1/hiveboxes/{id}", get(handlers::get_sandbox))
         .route("/api/v1/hiveboxes/{id}", delete(handlers::destroy_sandbox))
-        .route("/api/v1/hiveboxes/{id}/exec", post(handlers::exec_in_sandbox))
+        .route(
+            "/api/v1/hiveboxes/{id}/exec",
+            post(handlers::exec_in_sandbox),
+        )
         .route("/api/v1/hiveboxes/{id}/mcp", post(mcp::mcp_handler))
         .route("/api/v1/hiveboxes/{id}/files", put(handlers::upload_file))
         .route("/api/v1/hiveboxes/{id}/files", get(handlers::download_file))
-        .route("/api/v1/hiveboxes/{id}/opencode/{*rest}", any(opencode::opencode_proxy))
+        .route(
+            "/api/v1/hiveboxes/{id}/opencode/{*rest}",
+            any(opencode::opencode_proxy),
+        )
         .route("/api/v1/analytics", get(handlers::get_analytics))
         .layer(middleware::from_fn(move |req, next| {
             let key = api_key.clone();

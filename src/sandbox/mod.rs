@@ -40,7 +40,9 @@ use crate::runtime::ExecResult;
 
 use self::capabilities::drop_capabilities;
 use self::cgroup::{CgroupManager, ResourceLimits};
-use self::filesystem::{do_pivot_root, mount_special_filesystems, prepare_rootfs, set_sandbox_hostname};
+use self::filesystem::{
+    do_pivot_root, mount_special_filesystems, prepare_rootfs, set_sandbox_hostname,
+};
 use self::landlock::apply_landlock_restrictions;
 use self::network::NetworkMode;
 use self::seccomp::{install_seccomp_filter, SeccompProfile};
@@ -161,8 +163,8 @@ pub fn create_and_run(config: &SandboxConfig) -> Result<ExecResult> {
     );
 
     // Prepare the rootfs directory.
-    let rootfs_path = prepare_rootfs(&sandbox_id, &config.image)
-        .context("failed to prepare rootfs")?;
+    let rootfs_path =
+        prepare_rootfs(&sandbox_id, &config.image).context("failed to prepare rootfs")?;
 
     // Create pipes for capturing the child's stdout and stderr.
     let (stdout_pipe, stderr_pipe) =
@@ -216,8 +218,7 @@ pub fn create_and_run(config: &SandboxConfig) -> Result<ExecResult> {
     // Create the cgroup and apply resource limits.
     // This happens after clone but before the child starts doing real work
     // (the child is blocked on the sync pipe until UID/GID maps are set).
-    let cgroup = CgroupManager::create(&sandbox_id)
-        .context("failed to create cgroup")?;
+    let cgroup = CgroupManager::create(&sandbox_id).context("failed to create cgroup")?;
 
     cgroup
         .apply_limits(&config.limits)
@@ -282,11 +283,7 @@ pub fn create_and_run(config: &SandboxConfig) -> Result<ExecResult> {
 /// 5. **Drop capabilities** + set NO_NEW_PRIVS
 /// 6. **Install seccomp filter** (must be last — requires NO_NEW_PRIVS)
 /// 7. `execve` (run the user's command)
-fn child_setup_and_exec(
-    sandbox_id: &str,
-    rootfs: &std::path::Path,
-    command: &str,
-) -> Result<()> {
+fn child_setup_and_exec(sandbox_id: &str, rootfs: &std::path::Path, command: &str) -> Result<()> {
     // Step 1: Set the sandbox's hostname (visible only inside the UTS namespace).
     set_sandbox_hostname(sandbox_id)?;
 

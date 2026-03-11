@@ -24,7 +24,7 @@ use std::sync::Arc;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Json;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -61,11 +61,21 @@ struct JsonRpcError {
 
 impl JsonRpcResponse {
     fn success(id: serde_json::Value, result: serde_json::Value) -> Self {
-        Self { jsonrpc: "2.0", id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
 
     fn error(id: serde_json::Value, code: i64, message: String) -> Self {
-        Self { jsonrpc: "2.0", id, result: None, error: Some(JsonRpcError { code, message }) }
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: None,
+            error: Some(JsonRpcError { code, message }),
+        }
     }
 }
 
@@ -78,33 +88,48 @@ pub async fn mcp_handler(
     req_parts: axum::extract::Request,
 ) -> (StatusCode, Json<JsonRpcResponse>) {
     // Extract origin and auth from the incoming request for download URLs.
-    let host = req_parts.headers()
+    let host = req_parts
+        .headers()
         .get("host")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("localhost:7070");
     let base_url = format!("http://{host}");
-    let auth_header = req_parts.headers()
+    let auth_header = req_parts
+        .headers()
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
 
-    let req_ctx = RequestContext { base_url, auth_header };
+    let req_ctx = RequestContext {
+        base_url,
+        auth_header,
+    };
 
     let body = axum::body::to_bytes(req_parts.into_body(), 10 * 1024 * 1024).await;
     let req: JsonRpcRequest = match body {
         Ok(bytes) => match serde_json::from_slice(&bytes) {
             Ok(r) => r,
             Err(e) => {
-                return (StatusCode::BAD_REQUEST, Json(JsonRpcResponse::error(
-                    serde_json::Value::Null, -32700, format!("parse error: {e}")
-                )));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(JsonRpcResponse::error(
+                        serde_json::Value::Null,
+                        -32700,
+                        format!("parse error: {e}"),
+                    )),
+                );
             }
         },
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(JsonRpcResponse::error(
-                serde_json::Value::Null, -32700, format!("body error: {e}")
-            )));
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(JsonRpcResponse::error(
+                    serde_json::Value::Null,
+                    -32700,
+                    format!("body error: {e}"),
+                )),
+            );
         }
     };
 
@@ -113,14 +138,18 @@ pub async fn mcp_handler(
         None => {
             return (
                 StatusCode::NO_CONTENT,
-                Json(JsonRpcResponse::success(serde_json::Value::Null, serde_json::json!(null))),
+                Json(JsonRpcResponse::success(
+                    serde_json::Value::Null,
+                    serde_json::json!(null),
+                )),
             );
         }
     };
 
     let response = match req.method.as_str() {
-        "initialize" => {
-            JsonRpcResponse::success(id, serde_json::json!({
+        "initialize" => JsonRpcResponse::success(
+            id,
+            serde_json::json!({
                 "protocolVersion": "2024-11-05",
                 "capabilities": {
                     "tools": {}
@@ -137,28 +166,29 @@ pub async fn mcp_handler(
                     "Commands run as root inside the sandbox. ",
                     "Use the 'exec' tool for shell commands and the file tools for reading/writing files."
                 )
-            }))
-        }
-        "tools/list" => {
-            JsonRpcResponse::success(id, serde_json::json!({
+            }),
+        ),
+        "tools/list" => JsonRpcResponse::success(
+            id,
+            serde_json::json!({
                 "tools": crate::mcp::tool_definitions()
-            }))
-        }
+            }),
+        ),
         "tools/call" => {
             let params = req.params.unwrap_or_default();
             let name = params["name"].as_str().unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or_default();
 
-            debug!(tool = name, sandbox = sandbox_id, "executing MCP tool via HTTP");
+            debug!(
+                tool = name,
+                sandbox = sandbox_id,
+                "executing MCP tool via HTTP"
+            );
             let result = handle_tool_call(&state.manager, &sandbox_id, name, &args, &req_ctx).await;
             JsonRpcResponse::success(id, result)
         }
-        "ping" => {
-            JsonRpcResponse::success(id, serde_json::json!({}))
-        }
-        _ => {
-            JsonRpcResponse::error(id, -32601, format!("method not found: {}", req.method))
-        }
+        "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
+        _ => JsonRpcResponse::error(id, -32601, format!("method not found: {}", req.method)),
     };
 
     (StatusCode::OK, Json(response))
@@ -193,7 +223,9 @@ async fn handle_tool_call(
         "upload_file" => tool_upload_file(manager, sandbox_id, args).await,
         "download_file" => tool_download_file(sandbox_id, args, ctx).await,
         "read_media_file" => tool_read_media_file(manager, sandbox_id, args).await,
-        "list_directory_with_sizes" => tool_list_directory_with_sizes(manager, sandbox_id, args).await,
+        "list_directory_with_sizes" => {
+            tool_list_directory_with_sizes(manager, sandbox_id, args).await
+        }
         "glob" => tool_glob(manager, sandbox_id, args).await,
         _ => Err(anyhow::anyhow!("unknown tool: {name}")),
     };
@@ -226,7 +258,9 @@ async fn tool_exec(
     sandbox_id: &str,
     args: &serde_json::Value,
 ) -> anyhow::Result<String> {
-    let command = args["command"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'command'"))?;
+    let command = args["command"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'command'"))?;
     let result = exec_cmd(manager, sandbox_id, command).await?;
     let mut output = result.stdout;
     if !result.stderr.is_empty() {
@@ -244,7 +278,9 @@ async fn tool_read_file(
     sandbox_id: &str,
     args: &serde_json::Value,
 ) -> anyhow::Result<String> {
-    let path = args["path"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
+    let path = args["path"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
     let head = args.get("head").and_then(|v| v.as_u64());
     let tail = args.get("tail").and_then(|v| v.as_u64());
 
@@ -268,7 +304,9 @@ async fn tool_read_multiple_files(
     sandbox_id: &str,
     args: &serde_json::Value,
 ) -> anyhow::Result<String> {
-    let paths = args["paths"].as_array().ok_or_else(|| anyhow::anyhow!("missing 'paths'"))?;
+    let paths = args["paths"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing 'paths'"))?;
     let mut output = String::new();
 
     for path_val in paths {
@@ -294,10 +332,16 @@ async fn tool_write_file(
     sandbox_id: &str,
     args: &serde_json::Value,
 ) -> anyhow::Result<String> {
-    let path = args["path"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
-    let content = args["content"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'content'"))?;
+    let path = args["path"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
+    let content = args["content"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'content'"))?;
 
-    manager.write_file(sandbox_id, path, content.as_bytes()).await?;
+    manager
+        .write_file(sandbox_id, path, content.as_bytes())
+        .await?;
     Ok(format!("Written to {path} ({} bytes)", content.len()))
 }
 
@@ -306,13 +350,19 @@ async fn tool_edit_file(
     sandbox_id: &str,
     args: &serde_json::Value,
 ) -> anyhow::Result<String> {
-    let path = args["path"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
-    let old_text = args["old_text"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'old_text'"))?;
-    let new_text = args["new_text"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'new_text'"))?;
+    let path = args["path"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
+    let old_text = args["old_text"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'old_text'"))?;
+    let new_text = args["new_text"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'new_text'"))?;
 
     let content_bytes = manager.read_file(sandbox_id, path).await?;
-    let content = String::from_utf8(content_bytes)
-        .map_err(|_| anyhow::anyhow!("file is not valid UTF-8"))?;
+    let content =
+        String::from_utf8(content_bytes).map_err(|_| anyhow::anyhow!("file is not valid UTF-8"))?;
 
     let count = content.matches(old_text).count();
     if count == 0 {
@@ -323,7 +373,9 @@ async fn tool_edit_file(
     }
 
     let new_content = content.replacen(old_text, new_text, 1);
-    manager.write_file(sandbox_id, path, new_content.as_bytes()).await?;
+    manager
+        .write_file(sandbox_id, path, new_content.as_bytes())
+        .await?;
     Ok(format!("Edited {path} (1 replacement)"))
 }
 
@@ -342,13 +394,16 @@ async fn tool_directory_tree(
     sandbox_id: &str,
     args: &serde_json::Value,
 ) -> anyhow::Result<String> {
-    let path = args["path"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
+    let path = args["path"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
     let max_depth = args.get("max_depth").and_then(|v| v.as_u64()).unwrap_or(3);
     let result = exec_cmd(
         manager,
         sandbox_id,
         &format!("find '{path}' -maxdepth {max_depth} -not -path '*/\\.*' | head -200 | sort"),
-    ).await?;
+    )
+    .await?;
     Ok(result.stdout)
 }
 
@@ -357,8 +412,12 @@ async fn tool_search_files(
     sandbox_id: &str,
     args: &serde_json::Value,
 ) -> anyhow::Result<String> {
-    let path = args["path"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
-    let pattern = args["pattern"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'pattern'"))?;
+    let path = args["path"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
+    let pattern = args["pattern"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'pattern'"))?;
     let file_pattern = args.get("file_pattern").and_then(|v| v.as_str());
 
     let include = file_pattern
@@ -368,7 +427,8 @@ async fn tool_search_files(
         manager,
         sandbox_id,
         &format!("grep -rn '{pattern}' '{path}'{include} | head -100"),
-    ).await?;
+    )
+    .await?;
     Ok(result.stdout)
 }
 
@@ -377,7 +437,9 @@ async fn tool_get_file_info(
     sandbox_id: &str,
     args: &serde_json::Value,
 ) -> anyhow::Result<String> {
-    let path = args["path"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
+    let path = args["path"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
     let result = exec_cmd(manager, sandbox_id, &format!("stat '{path}'")).await?;
     Ok(result.stdout)
 }
@@ -387,7 +449,9 @@ async fn tool_create_directory(
     sandbox_id: &str,
     args: &serde_json::Value,
 ) -> anyhow::Result<String> {
-    let path = args["path"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
+    let path = args["path"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
     let result = exec_cmd(manager, sandbox_id, &format!("mkdir -p '{path}'")).await?;
     if result.exit_code != 0 {
         anyhow::bail!("{}", result.stderr.trim());
@@ -400,9 +464,18 @@ async fn tool_move_file(
     sandbox_id: &str,
     args: &serde_json::Value,
 ) -> anyhow::Result<String> {
-    let source = args["source"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'source'"))?;
-    let destination = args["destination"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'destination'"))?;
-    let result = exec_cmd(manager, sandbox_id, &format!("mv '{source}' '{destination}'")).await?;
+    let source = args["source"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'source'"))?;
+    let destination = args["destination"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'destination'"))?;
+    let result = exec_cmd(
+        manager,
+        sandbox_id,
+        &format!("mv '{source}' '{destination}'"),
+    )
+    .await?;
     if result.exit_code != 0 {
         anyhow::bail!("{}", result.stderr.trim());
     }
@@ -414,10 +487,14 @@ async fn tool_upload_file(
     sandbox_id: &str,
     args: &serde_json::Value,
 ) -> anyhow::Result<String> {
-    let path = args["path"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
+    let path = args["path"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
 
     let content = if let Some(b64) = args.get("content_base64").and_then(|v| v.as_str()) {
-        BASE64.decode(b64).map_err(|_| anyhow::anyhow!("invalid base64 content"))?
+        BASE64
+            .decode(b64)
+            .map_err(|_| anyhow::anyhow!("invalid base64 content"))?
     } else if let Some(text) = args.get("content").and_then(|v| v.as_str()) {
         text.as_bytes().to_vec()
     } else {
@@ -434,12 +511,20 @@ async fn tool_read_media_file(
     sandbox_id: &str,
     args: &serde_json::Value,
 ) -> anyhow::Result<String> {
-    let path = args["path"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
+    let path = args["path"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
 
     let content = manager.read_file(sandbox_id, path).await?;
     let b64 = BASE64.encode(&content);
 
-    let mime = match path.rsplit('.').next().unwrap_or("").to_lowercase().as_str() {
+    let mime = match path
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_lowercase()
+        .as_str()
+    {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -474,8 +559,13 @@ async fn tool_glob(
     sandbox_id: &str,
     args: &serde_json::Value,
 ) -> anyhow::Result<String> {
-    let pattern = args["pattern"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'pattern'"))?;
-    let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("/workspace");
+    let pattern = args["pattern"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'pattern'"))?;
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("/workspace");
 
     let cmd = if pattern.contains('/') {
         format!(
@@ -500,22 +590,34 @@ async fn tool_download_file(
     args: &serde_json::Value,
     ctx: &RequestContext,
 ) -> anyhow::Result<String> {
-    let path = args["path"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
+    let path = args["path"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'path'"))?;
 
-    let encoded_path: String = path.bytes().map(|b| {
-        if b.is_ascii_alphanumeric() || b == b'/' || b == b'-' || b == b'_' || b == b'.' {
-            format!("{}", b as char)
-        } else {
-            format!("%{:02X}", b)
-        }
-    }).collect();
-    let url = format!("{}/api/v1/hiveboxes/{sandbox_id}/files?path={encoded_path}", ctx.base_url);
-    let mut cmd = format!("curl -o {filename} \"{url}\"",
-        filename = path.rsplit('/').next().unwrap_or("download"));
+    let encoded_path: String = path
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b == b'/' || b == b'-' || b == b'_' || b == b'.' {
+                format!("{}", b as char)
+            } else {
+                format!("%{:02X}", b)
+            }
+        })
+        .collect();
+    let url = format!(
+        "{}/api/v1/hiveboxes/{sandbox_id}/files?path={encoded_path}",
+        ctx.base_url
+    );
+    let mut cmd = format!(
+        "curl -o {filename} \"{url}\"",
+        filename = path.rsplit('/').next().unwrap_or("download")
+    );
     if !ctx.auth_header.is_empty() {
-        cmd = format!("curl -o {filename} -H '{auth}' \"{url}\"",
+        cmd = format!(
+            "curl -o {filename} -H '{auth}' \"{url}\"",
             filename = path.rsplit('/').next().unwrap_or("download"),
-            auth = ctx.auth_header);
+            auth = ctx.auth_header
+        );
     }
     Ok(format!("Download: {url}\n\n{cmd}"))
 }

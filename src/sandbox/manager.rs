@@ -14,8 +14,8 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{bail, Context, Result};
@@ -187,11 +187,7 @@ impl SandboxManager {
     }
 
     /// Creates a new persistent sandbox.
-    pub async fn create(
-        &self,
-        config: SandboxConfig,
-        timeout_secs: u64,
-    ) -> Result<String> {
+    pub async fn create(&self, config: SandboxConfig, timeout_secs: u64) -> Result<String> {
         let sandbox_id = resolve_sandbox_id(config.name.as_deref());
 
         if self.sandboxes.read().await.contains_key(&sandbox_id) {
@@ -211,8 +207,8 @@ impl SandboxManager {
             "creating persistent sandbox"
         );
 
-        let rootfs_path = prepare_rootfs(&sandbox_id, &config.image)
-            .context("failed to prepare rootfs")?;
+        let rootfs_path =
+            prepare_rootfs(&sandbox_id, &config.image).context("failed to prepare rootfs")?;
 
         let init_pid = spawn_init_process(&sandbox_id, &rootfs_path, &config)?;
 
@@ -260,7 +256,10 @@ impl SandboxManager {
             opencode_config_dir: None,
         };
 
-        self.sandboxes.write().await.insert(sandbox_id.clone(), sandbox);
+        self.sandboxes
+            .write()
+            .await
+            .insert(sandbox_id.clone(), sandbox);
 
         // Spawn an opencode serve instance for this sandbox (if enabled).
         if self.daemon_config.opencode_enabled {
@@ -289,7 +288,8 @@ impl SandboxManager {
         // Read sandbox-specific config before we build the opencode config.
         let (skills, custom_mcps, llm_base_url, llm_api_key, llm_model) = {
             let sandboxes = self.sandboxes.read().await;
-            let sb = sandboxes.get(sandbox_id)
+            let sb = sandboxes
+                .get(sandbox_id)
                 .context("sandbox not found while spawning opencode")?;
             (
                 sb.config.skills.clone(),
@@ -301,15 +301,17 @@ impl SandboxManager {
         };
 
         // Build the MCP URL pointing back to this sandbox.
-        let mcp_url = format!(
-            "http://127.0.0.1:{daemon_port}/api/v1/hiveboxes/{sandbox_id}/mcp"
-        );
+        let mcp_url = format!("http://127.0.0.1:{daemon_port}/api/v1/hiveboxes/{sandbox_id}/mcp");
 
         // Create temp config directory.
         let config_dir = PathBuf::from(format!("/tmp/hivebox-opencode/{sandbox_id}"));
         let opencode_dir = config_dir.join("opencode");
-        std::fs::create_dir_all(&opencode_dir)
-            .with_context(|| format!("failed to create opencode config dir: {}", opencode_dir.display()))?;
+        std::fs::create_dir_all(&opencode_dir).with_context(|| {
+            format!(
+                "failed to create opencode config dir: {}",
+                opencode_dir.display()
+            )
+        })?;
 
         // Build the opencode config JSON.
         let mut mcp_headers = serde_json::Map::new();
@@ -333,12 +335,15 @@ impl SandboxManager {
 
         // Build the MCP section: hivebox (always present) + global MCPs + per-sandbox MCPs.
         let mut mcp_section = serde_json::Map::new();
-        mcp_section.insert("hivebox".to_string(), serde_json::json!({
-            "type": "remote",
-            "url": mcp_url,
-            "headers": mcp_headers,
-            "enabled": true
-        }));
+        mcp_section.insert(
+            "hivebox".to_string(),
+            serde_json::json!({
+                "type": "remote",
+                "url": mcp_url,
+                "headers": mcp_headers,
+                "enabled": true
+            }),
+        );
 
         // Merge global MCPs from HIVEBOX_MCPS env var.
         if let Some(ref global) = self.daemon_config.global_mcps {
@@ -364,8 +369,12 @@ impl SandboxManager {
 
         // Build LLM provider config if base_url + model are provided.
         // Resolution: per-sandbox > global (DaemonConfig) > opencode defaults.
-        let eff_base_url = llm_base_url.as_ref().or(self.daemon_config.llm_base_url.as_ref());
-        let eff_api_key = llm_api_key.as_ref().or(self.daemon_config.llm_api_key.as_ref());
+        let eff_base_url = llm_base_url
+            .as_ref()
+            .or(self.daemon_config.llm_base_url.as_ref());
+        let eff_api_key = llm_api_key
+            .as_ref()
+            .or(self.daemon_config.llm_api_key.as_ref());
         let eff_model = llm_model.as_ref().or(self.daemon_config.llm_model.as_ref());
 
         let mut config_json = serde_json::json!({
@@ -408,8 +417,9 @@ impl SandboxManager {
         }
 
         let config_path = opencode_dir.join("opencode.jsonc");
-        std::fs::write(&config_path, serde_json::to_string_pretty(&config_json)?)
-            .with_context(|| format!("failed to write opencode config: {}", config_path.display()))?;
+        std::fs::write(&config_path, serde_json::to_string_pretty(&config_json)?).with_context(
+            || format!("failed to write opencode config: {}", config_path.display()),
+        )?;
 
         // Copy skills into the sandbox's opencode config directory.
         // Priority: per-sandbox skills list > global skills_path from config/env.
@@ -434,7 +444,11 @@ impl SandboxManager {
                         if src.is_dir() {
                             copy_dir_recursive(&src, &sandbox_skills.join(name))?;
                         } else {
-                            warn!(sandbox = sandbox_id, skill = name.as_str(), "skill not found, skipping");
+                            warn!(
+                                sandbox = sandbox_id,
+                                skill = name.as_str(),
+                                "skill not found, skipping"
+                            );
                         }
                     }
                 }
@@ -449,7 +463,8 @@ impl SandboxManager {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
 
-        let child = cmd.spawn()
+        let child = cmd
+            .spawn()
             .with_context(|| "failed to spawn opencode serve — is opencode installed?")?;
 
         let pid = child.id();
@@ -486,21 +501,31 @@ impl SandboxManager {
     ) -> Result<crate::runtime::ExecResult> {
         let (init_pid, rootfs_path, cwd, limits) = {
             let sandboxes = self.sandboxes.read().await;
-            let sandbox = sandboxes.get(sandbox_id).ok_or_else(|| {
-                anyhow::anyhow!("sandbox '{}' not found", sandbox_id)
-            })?;
+            let sandbox = sandboxes
+                .get(sandbox_id)
+                .ok_or_else(|| anyhow::anyhow!("sandbox '{}' not found", sandbox_id))?;
 
             if sandbox.state != SandboxState::Running {
-                bail!("sandbox '{}' is not running (state: {:?})", sandbox_id, sandbox.state);
+                bail!(
+                    "sandbox '{}' is not running (state: {:?})",
+                    sandbox_id,
+                    sandbox.state
+                );
             }
 
-            let pid = sandbox.init_pid.ok_or_else(|| {
-                anyhow::anyhow!("sandbox '{}' has no init process", sandbox_id)
-            })?;
-            let rootfs = sandbox.rootfs_path.clone().ok_or_else(|| {
-                anyhow::anyhow!("sandbox '{}' has no rootfs path", sandbox_id)
-            })?;
-            (pid, rootfs, sandbox.cwd.clone(), sandbox.config.limits.clone())
+            let pid = sandbox
+                .init_pid
+                .ok_or_else(|| anyhow::anyhow!("sandbox '{}' has no init process", sandbox_id))?;
+            let rootfs = sandbox
+                .rootfs_path
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("sandbox '{}' has no rootfs path", sandbox_id))?;
+            (
+                pid,
+                rootfs,
+                sandbox.cwd.clone(),
+                sandbox.config.limits.clone(),
+            )
         };
 
         debug!(sandbox = sandbox_id, cwd, command, "executing command");
@@ -601,9 +626,8 @@ impl SandboxManager {
     pub async fn destroy(&self, sandbox_id: &str) -> Result<()> {
         let sandbox = self.sandboxes.write().await.remove(sandbox_id);
 
-        let sandbox = sandbox.ok_or_else(|| {
-            anyhow::anyhow!("sandbox '{}' not found", sandbox_id)
-        })?;
+        let sandbox =
+            sandbox.ok_or_else(|| anyhow::anyhow!("sandbox '{}' not found", sandbox_id))?;
 
         info!(sandbox = sandbox_id, "destroying sandbox");
         destroy_sandbox_resources(&sandbox);
@@ -624,20 +648,16 @@ impl SandboxManager {
     }
 
     /// Writes a file into a sandbox's filesystem.
-    pub async fn write_file(
-        &self,
-        sandbox_id: &str,
-        path: &str,
-        content: &[u8],
-    ) -> Result<()> {
+    pub async fn write_file(&self, sandbox_id: &str, path: &str, content: &[u8]) -> Result<()> {
         let sandboxes = self.sandboxes.read().await;
-        let sandbox = sandboxes.get(sandbox_id).ok_or_else(|| {
-            anyhow::anyhow!("sandbox '{}' not found", sandbox_id)
-        })?;
+        let sandbox = sandboxes
+            .get(sandbox_id)
+            .ok_or_else(|| anyhow::anyhow!("sandbox '{}' not found", sandbox_id))?;
 
-        let rootfs = sandbox.rootfs_path.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("sandbox has no rootfs")
-        })?;
+        let rootfs = sandbox
+            .rootfs_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("sandbox has no rootfs"))?;
 
         let full_path = rootfs.join(path.trim_start_matches('/'));
         if let Some(parent) = full_path.parent() {
@@ -649,19 +669,16 @@ impl SandboxManager {
     }
 
     /// Reads a file from a sandbox's filesystem.
-    pub async fn read_file(
-        &self,
-        sandbox_id: &str,
-        path: &str,
-    ) -> Result<Vec<u8>> {
+    pub async fn read_file(&self, sandbox_id: &str, path: &str) -> Result<Vec<u8>> {
         let sandboxes = self.sandboxes.read().await;
-        let sandbox = sandboxes.get(sandbox_id).ok_or_else(|| {
-            anyhow::anyhow!("sandbox '{}' not found", sandbox_id)
-        })?;
+        let sandbox = sandboxes
+            .get(sandbox_id)
+            .ok_or_else(|| anyhow::anyhow!("sandbox '{}' not found", sandbox_id))?;
 
-        let rootfs = sandbox.rootfs_path.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("sandbox has no rootfs")
-        })?;
+        let rootfs = sandbox
+            .rootfs_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("sandbox has no rootfs"))?;
 
         let full_path = rootfs.join(path.trim_start_matches('/'));
         let content = std::fs::read(&full_path)
@@ -720,7 +737,10 @@ impl SandboxManager {
                 }
                 // CPU: try cgroup, then PID namespace scan; take the max.
                 // Add cumulative CPU from completed commands that are no longer visible.
-                let mut cpu = cg.as_ref().and_then(|c| c.cpu_usage_usec().ok()).unwrap_or(0);
+                let mut cpu = cg
+                    .as_ref()
+                    .and_then(|c| c.cpu_usage_usec().ok())
+                    .unwrap_or(0);
                 if let Some(pid) = s.init_pid {
                     let ns_cpu = cpu_from_namespace(pid);
                     if ns_cpu > cpu {
@@ -757,7 +777,11 @@ impl SandboxManager {
                     (Some((prev_total, prev_idle)), Some((cur_total, cur_idle))) => {
                         let dt = cur_total.saturating_sub(prev_total) as f64;
                         let di = cur_idle.saturating_sub(prev_idle) as f64;
-                        if dt > 0.0 { ((dt - di) / dt) * 100.0 } else { 0.0 }
+                        if dt > 0.0 {
+                            ((dt - di) / dt) * 100.0
+                        } else {
+                            0.0
+                        }
                     }
                     _ => 0.0,
                 };
@@ -800,7 +824,11 @@ impl SandboxManager {
                     .unwrap_or_default()
                     .as_secs();
                 let cutoff = now.saturating_sub(range);
-                history.iter().filter(|s| s.timestamp >= cutoff).cloned().collect()
+                history
+                    .iter()
+                    .filter(|s| s.timestamp >= cutoff)
+                    .cloned()
+                    .collect()
             }
             None => history.iter().cloned().collect(),
         };
@@ -876,7 +904,11 @@ fn spawn_init_process(
 fn destroy_sandbox_resources(sandbox: &ManagedSandbox) {
     // Kill opencode serve process if running.
     if let Some(pid) = sandbox.opencode_pid {
-        info!(sandbox = sandbox.id, opencode_pid = pid, "killing opencode serve");
+        info!(
+            sandbox = sandbox.id,
+            opencode_pid = pid,
+            "killing opencode serve"
+        );
         let _ = nix::sys::signal::kill(
             nix::unistd::Pid::from_raw(pid as i32),
             nix::sys::signal::Signal::SIGTERM,
@@ -934,12 +966,19 @@ fn sandbox_to_info(s: &ManagedSandbox) -> SandboxInfo {
         let mut pids = cg.as_ref().and_then(|c| c.pid_count().ok()).unwrap_or(0);
         if let Some(pid) = s.init_pid {
             let ns_pids = count_namespace_pids(pid);
-            if ns_pids > pids { pids = ns_pids; }
+            if ns_pids > pids {
+                pids = ns_pids;
+            }
         }
-        let mut cpu = cg.as_ref().and_then(|c| c.cpu_usage_usec().ok()).unwrap_or(0);
+        let mut cpu = cg
+            .as_ref()
+            .and_then(|c| c.cpu_usage_usec().ok())
+            .unwrap_or(0);
         if let Some(pid) = s.init_pid {
             let ns_cpu = cpu_from_namespace(pid);
-            if ns_cpu > cpu { cpu = ns_cpu; }
+            if ns_cpu > cpu {
+                cpu = ns_cpu;
+            }
         }
         cpu += s.cumulative_cpu_usec;
         (mem, pids, cpu)
@@ -1128,7 +1167,11 @@ fn read_host_memory() -> (u64, u64) {
 }
 
 fn parse_meminfo_kb(s: &str) -> u64 {
-    s.trim().trim_end_matches("kB").trim().parse::<u64>().unwrap_or(0)
+    s.trim()
+        .trim_end_matches("kB")
+        .trim()
+        .parse::<u64>()
+        .unwrap_or(0)
 }
 
 /// Reads CPU jiffies from /proc/stat.
@@ -1153,9 +1196,7 @@ fn read_cpu_jiffies() -> Option<(u64, u64)> {
 }
 
 fn format_system_time(t: SystemTime) -> String {
-    let duration = t
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
+    let duration = t.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
     let secs = duration.as_secs();
 
     let days = secs / 86400;

@@ -58,8 +58,7 @@ pub fn drop_capabilities() -> Result<()> {
     // Set PR_SET_NO_NEW_PRIVS first.
     // This flag ensures that execve never grants new privileges (no setuid escalation).
     // It's also a prerequisite for unprivileged seccomp filter installation.
-    set_no_new_privs()
-        .context("failed to set PR_SET_NO_NEW_PRIVS")?;
+    set_no_new_privs().context("failed to set PR_SET_NO_NEW_PRIVS")?;
 
     // Get all possible capabilities.
     let all_caps = caps::all();

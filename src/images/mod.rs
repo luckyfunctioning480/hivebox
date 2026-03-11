@@ -83,9 +83,7 @@ impl ImageStore {
 
     /// Checks whether an image exists in the store.
     pub fn exists(&self, name: &str) -> bool {
-        self.images_dir
-            .join(format!("{name}.squashfs"))
-            .exists()
+        self.images_dir.join(format!("{name}.squashfs")).exists()
     }
 
     /// Lists all available images in the store.

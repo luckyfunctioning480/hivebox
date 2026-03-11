@@ -20,7 +20,7 @@
 use std::io::Write;
 
 use anyhow::{Context, Result};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, error};
@@ -55,11 +55,21 @@ struct JsonRpcError {
 
 impl JsonRpcResponse {
     fn success(id: serde_json::Value, result: serde_json::Value) -> Self {
-        Self { jsonrpc: "2.0", id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
 
     fn error(id: serde_json::Value, code: i64, message: String) -> Self {
-        Self { jsonrpc: "2.0", id, result: None, error: Some(JsonRpcError { code, message }) }
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: None,
+            error: Some(JsonRpcError { code, message }),
+        }
     }
 }
 
@@ -96,7 +106,9 @@ impl HiveboxClient {
     /// Execute a shell command inside the sandbox.
     async fn exec(&self, command: &str) -> Result<ExecResponse> {
         let url = format!("{}/api/v1/hiveboxes/{}/exec", self.api_url, self.sandbox_id);
-        let mut req = self.client.post(&url)
+        let mut req = self
+            .client
+            .post(&url)
             .json(&serde_json::json!({ "command": command }));
         if let Some(ref key) = self.api_key {
             req = req.header("Authorization", format!("Bearer {key}"));
@@ -114,9 +126,13 @@ impl HiveboxClient {
     async fn write_file(&self, path: &str, content: &[u8]) -> Result<()> {
         let url = format!(
             "{}/api/v1/hiveboxes/{}/files?path={}",
-            self.api_url, self.sandbox_id, urlencoded(path)
+            self.api_url,
+            self.sandbox_id,
+            urlencoded(path)
         );
-        let mut req = self.client.put(&url)
+        let mut req = self
+            .client
+            .put(&url)
             .header("Content-Type", "application/octet-stream")
             .body(content.to_vec());
         if let Some(ref key) = self.api_key {
@@ -135,7 +151,9 @@ impl HiveboxClient {
     async fn read_file(&self, path: &str) -> Result<Vec<u8>> {
         let url = format!(
             "{}/api/v1/hiveboxes/{}/files?path={}",
-            self.api_url, self.sandbox_id, urlencoded(path)
+            self.api_url,
+            self.sandbox_id,
+            urlencoded(path)
         );
         let mut req = self.client.get(&url);
         if let Some(ref key) = self.api_key {
@@ -435,7 +453,10 @@ async fn tool_read_file(client: &HiveboxClient, args: &serde_json::Value) -> Res
     Ok(resp.stdout)
 }
 
-async fn tool_read_multiple_files(client: &HiveboxClient, args: &serde_json::Value) -> Result<String> {
+async fn tool_read_multiple_files(
+    client: &HiveboxClient,
+    args: &serde_json::Value,
+) -> Result<String> {
     let paths = args["paths"].as_array().context("missing 'paths'")?;
     let mut output = String::new();
 
@@ -496,9 +517,11 @@ async fn tool_list_directory(client: &HiveboxClient, args: &serde_json::Value) -
 async fn tool_directory_tree(client: &HiveboxClient, args: &serde_json::Value) -> Result<String> {
     let path = args["path"].as_str().context("missing 'path'")?;
     let max_depth = args.get("max_depth").and_then(|v| v.as_u64()).unwrap_or(3);
-    let resp = client.exec(&format!(
-        "find '{path}' -maxdepth {max_depth} -not -path '*/\\.*' | head -200 | sort"
-    )).await?;
+    let resp = client
+        .exec(&format!(
+            "find '{path}' -maxdepth {max_depth} -not -path '*/\\.*' | head -200 | sort"
+        ))
+        .await?;
     Ok(resp.stdout)
 }
 
@@ -510,9 +533,11 @@ async fn tool_search_files(client: &HiveboxClient, args: &serde_json::Value) -> 
     let include = file_pattern
         .map(|p| format!(" --include='{p}'"))
         .unwrap_or_default();
-    let resp = client.exec(&format!(
-        "grep -rn '{pattern}' '{path}'{include} | head -100"
-    )).await?;
+    let resp = client
+        .exec(&format!(
+            "grep -rn '{pattern}' '{path}'{include} | head -100"
+        ))
+        .await?;
     Ok(resp.stdout)
 }
 
@@ -533,8 +558,12 @@ async fn tool_create_directory(client: &HiveboxClient, args: &serde_json::Value)
 
 async fn tool_move_file(client: &HiveboxClient, args: &serde_json::Value) -> Result<String> {
     let source = args["source"].as_str().context("missing 'source'")?;
-    let destination = args["destination"].as_str().context("missing 'destination'")?;
-    let resp = client.exec(&format!("mv '{source}' '{destination}'")).await?;
+    let destination = args["destination"]
+        .as_str()
+        .context("missing 'destination'")?;
+    let resp = client
+        .exec(&format!("mv '{source}' '{destination}'"))
+        .await?;
     if resp.exit_code != 0 {
         anyhow::bail!("{}", resp.stderr.trim());
     }
@@ -562,7 +591,13 @@ async fn tool_read_media_file(client: &HiveboxClient, args: &serde_json::Value) 
     let content = client.read_file(path).await?;
     let b64 = BASE64.encode(&content);
 
-    let mime = match path.rsplit('.').next().unwrap_or("").to_lowercase().as_str() {
+    let mime = match path
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_lowercase()
+        .as_str()
+    {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -582,7 +617,10 @@ async fn tool_read_media_file(client: &HiveboxClient, args: &serde_json::Value) 
     Ok(format!("data:{mime};base64,{b64}"))
 }
 
-async fn tool_list_directory_with_sizes(client: &HiveboxClient, args: &serde_json::Value) -> Result<String> {
+async fn tool_list_directory_with_sizes(
+    client: &HiveboxClient,
+    args: &serde_json::Value,
+) -> Result<String> {
     let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
     let resp = client.exec(&format!("ls -lhS '{path}'")).await?;
     Ok(resp.stdout)
@@ -590,7 +628,10 @@ async fn tool_list_directory_with_sizes(client: &HiveboxClient, args: &serde_jso
 
 async fn tool_glob(client: &HiveboxClient, args: &serde_json::Value) -> Result<String> {
     let pattern = args["pattern"].as_str().context("missing 'pattern'")?;
-    let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("/workspace");
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("/workspace");
 
     // Use find with -name/-path depending on whether pattern contains /
     let cmd = if pattern.contains('/') {
@@ -615,14 +656,18 @@ async fn tool_glob(client: &HiveboxClient, args: &serde_json::Value) -> Result<S
 
 async fn tool_download_file(client: &HiveboxClient, args: &serde_json::Value) -> Result<String> {
     let path = args["path"].as_str().context("missing 'path'")?;
-    let as_base64 = args.get("base64").and_then(|v| v.as_bool()).unwrap_or(false);
+    let as_base64 = args
+        .get("base64")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let content = client.read_file(path).await?;
 
     if as_base64 {
         Ok(BASE64.encode(&content))
     } else {
-        String::from_utf8(content).context("file is not valid UTF-8 — use base64: true for binary files")
+        String::from_utf8(content)
+            .context("file is not valid UTF-8 — use base64: true for binary files")
     }
 }
 
@@ -663,8 +708,9 @@ pub async fn run(sandbox_id: String, api_url: String, api_key: Option<String>) -
         };
 
         let response = match req.method.as_str() {
-            "initialize" => {
-                JsonRpcResponse::success(id, serde_json::json!({
+            "initialize" => JsonRpcResponse::success(
+                id,
+                serde_json::json!({
                     "protocolVersion": "2024-11-05",
                     "capabilities": {
                         "tools": {}
@@ -681,13 +727,14 @@ pub async fn run(sandbox_id: String, api_url: String, api_key: Option<String>) -
                         "Commands run as root inside the sandbox. ",
                         "Use the 'exec' tool for shell commands and the file tools for reading/writing files."
                     )
-                }))
-            }
-            "tools/list" => {
-                JsonRpcResponse::success(id, serde_json::json!({
+                }),
+            ),
+            "tools/list" => JsonRpcResponse::success(
+                id,
+                serde_json::json!({
                     "tools": tool_definitions()
-                }))
-            }
+                }),
+            ),
             "tools/call" => {
                 let params = req.params.unwrap_or_default();
                 let name = params["name"].as_str().unwrap_or("");
@@ -697,12 +744,8 @@ pub async fn run(sandbox_id: String, api_url: String, api_key: Option<String>) -
                 let result = handle_tool_call(&client, name, &args).await;
                 JsonRpcResponse::success(id, result)
             }
-            "ping" => {
-                JsonRpcResponse::success(id, serde_json::json!({}))
-            }
-            _ => {
-                JsonRpcResponse::error(id, -32601, format!("method not found: {}", req.method))
-            }
+            "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
+            _ => JsonRpcResponse::error(id, -32601, format!("method not found: {}", req.method)),
         };
 
         // Write response to stdout (one JSON object per line).

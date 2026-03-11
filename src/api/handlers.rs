@@ -78,16 +78,11 @@ pub async fn create_sandbox(
 
     info!(sandbox = sandbox_id, "sandbox created via API");
 
-    Ok((
-        StatusCode::CREATED,
-        Json(create_response_from_info(&info)),
-    ))
+    Ok((StatusCode::CREATED, Json(create_response_from_info(&info))))
 }
 
 /// `GET /api/v1/hiveboxes` — List all sandboxes.
-pub async fn list_sandboxes(
-    State(state): State<AppState>,
-) -> Json<ListSandboxesResponse> {
+pub async fn list_sandboxes(State(state): State<AppState>) -> Json<ListSandboxesResponse> {
     let manager = &state.manager;
     let sandboxes = manager.list().await;
     let total = sandboxes.len();
@@ -95,9 +90,9 @@ pub async fn list_sandboxes(
     let summaries: Vec<SandboxSummary> = sandboxes
         .into_iter()
         .map(|s| {
-            let opencode_url = s.opencode_port.map(|_| {
-                format!("/api/v1/hiveboxes/{}/opencode/", s.id)
-            });
+            let opencode_url = s
+                .opencode_port
+                .map(|_| format!("/api/v1/hiveboxes/{}/opencode/", s.id));
             SandboxSummary {
                 id: s.id,
                 status: format!("{:?}", s.state).to_lowercase(),
@@ -221,17 +216,14 @@ pub async fn upload_file(
         )
     })?;
 
-    manager
-        .write_file(&id, path, &body)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("failed to write file: {e}"),
-                }),
-            )
-        })?;
+    manager.write_file(&id, path, &body).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("failed to write file: {e}"),
+            }),
+        )
+    })?;
 
     Ok(StatusCode::OK)
 }
@@ -252,17 +244,14 @@ pub async fn download_file(
         )
     })?;
 
-    manager
-        .read_file(&id, path)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("failed to read file: {e}"),
-                }),
-            )
-        })
+    manager.read_file(&id, path).await.map_err(|e| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("failed to read file: {e}"),
+            }),
+        )
+    })
 }
 
 /// `GET /api/v1/analytics` — Get metrics history.
@@ -279,9 +268,9 @@ pub async fn get_analytics(
 
 /// Helper: build a CreateSandboxResponse from SandboxInfo.
 fn create_response_from_info(info: &SandboxInfo) -> CreateSandboxResponse {
-    let opencode_url = info.opencode_port.map(|_| {
-        format!("/api/v1/hiveboxes/{}/opencode/", info.id)
-    });
+    let opencode_url = info
+        .opencode_port
+        .map(|_| format!("/api/v1/hiveboxes/{}/opencode/", info.id));
     CreateSandboxResponse {
         id: info.id.clone(),
         status: format!("{:?}", info.state).to_lowercase(),

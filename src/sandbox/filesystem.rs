@@ -124,8 +124,8 @@ fn prepare_rootfs_overlayfs(
         // Extract squashfs contents to the squashfs_dir using unsquashfs.
         let status = std::process::Command::new("unsquashfs")
             .args([
-                "-f",           // force overwrite
-                "-d",           // destination directory
+                "-f", // force overwrite
+                "-d", // destination directory
                 &squashfs_dir.display().to_string(),
                 &squashfs_path.display().to_string(),
             ])
@@ -238,7 +238,11 @@ fn prepare_rootfs_overlayfs(
         );
 
         let status = std::process::Command::new("cp")
-            .args(["-a", &format!("{}/.", squashfs_dir.display()), &merged_dir.display().to_string()])
+            .args([
+                "-a",
+                &format!("{}/.", squashfs_dir.display()),
+                &merged_dir.display().to_string(),
+            ])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -337,13 +341,11 @@ pub fn do_pivot_root(new_root: &Path) -> Result<()> {
 
     // Create a directory to stash the old root during the pivot.
     let old_root = new_root.join(".pivot_old");
-    fs::create_dir_all(&old_root)
-        .context("failed to create .pivot_old directory")?;
+    fs::create_dir_all(&old_root).context("failed to create .pivot_old directory")?;
 
     // pivot_root: swap the filesystem root.
     // new_root becomes `/`, and the old root is moved to .pivot_old.
-    pivot_root(new_root, &old_root)
-        .context("pivot_root failed")?;
+    pivot_root(new_root, &old_root).context("pivot_root failed")?;
 
     // Now we're inside the new root. Change to `/`.
     chdir("/").context("failed to chdir to / after pivot_root")?;
@@ -351,8 +353,7 @@ pub fn do_pivot_root(new_root: &Path) -> Result<()> {
     // Unmount the old root. MNT_DETACH ensures lazy unmount even if
     // something still references it — it becomes invisible immediately
     // but actual cleanup happens when the last reference is dropped.
-    umount2("/.pivot_old", MntFlags::MNT_DETACH)
-        .context("failed to unmount old root")?;
+    umount2("/.pivot_old", MntFlags::MNT_DETACH).context("failed to unmount old root")?;
 
     // Remove the empty mount point directory.
     let _ = fs::remove_dir("/.pivot_old");
@@ -416,7 +417,12 @@ pub fn mount_special_filesystems() -> Result<()> {
     .context("failed to mount /dev/shm")?;
 
     // Mount /tmp as tmpfs for writable temporary storage.
-    create_dir_and_mount("tmpfs", "/tmp", "tmpfs", MsFlags::MS_NOSUID | MsFlags::MS_NODEV)?;
+    create_dir_and_mount(
+        "tmpfs",
+        "/tmp",
+        "tmpfs",
+        MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
+    )?;
 
     info!("special filesystems mounted");
     Ok(())
@@ -482,22 +488,10 @@ fn create_device_nodes() -> Result<()> {
 }
 
 /// Helper: creates a directory if needed and mounts a filesystem on it.
-fn create_dir_and_mount(
-    source: &str,
-    target: &str,
-    fstype: &str,
-    flags: MsFlags,
-) -> Result<()> {
-    fs::create_dir_all(target)
-        .with_context(|| format!("failed to create mount point {target}"))?;
-    mount(
-        Some(source),
-        target,
-        Some(fstype),
-        flags,
-        None::<&str>,
-    )
-    .with_context(|| format!("failed to mount {fstype} on {target}"))?;
+fn create_dir_and_mount(source: &str, target: &str, fstype: &str, flags: MsFlags) -> Result<()> {
+    fs::create_dir_all(target).with_context(|| format!("failed to create mount point {target}"))?;
+    mount(Some(source), target, Some(fstype), flags, None::<&str>)
+        .with_context(|| format!("failed to mount {fstype} on {target}"))?;
     debug!(source, target, fstype = fstype, "mounted");
     Ok(())
 }
@@ -523,12 +517,8 @@ pub fn cleanup_rootfs(sandbox_id: &str) -> Result<()> {
 
     // Remove the sandbox working directory.
     if sandbox_dir.exists() {
-        fs::remove_dir_all(&sandbox_dir).with_context(|| {
-            format!(
-                "failed to remove sandbox dir: {}",
-                sandbox_dir.display()
-            )
-        })?;
+        fs::remove_dir_all(&sandbox_dir)
+            .with_context(|| format!("failed to remove sandbox dir: {}", sandbox_dir.display()))?;
     }
 
     debug!(sandbox = sandbox_id, "filesystem cleaned up");

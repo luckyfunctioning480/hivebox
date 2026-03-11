@@ -89,8 +89,7 @@ fn handle_run(args: cli::RunArgs) -> Result<()> {
         llm_model: None,
     };
 
-    let result = sandbox::create_and_run(&config)
-        .context("sandbox execution failed")?;
+    let result = sandbox::create_and_run(&config).context("sandbox execution failed")?;
 
     if !result.stdout.is_empty() {
         print!("{}", result.stdout);
