@@ -30,6 +30,28 @@ pub struct CreateSandboxRequest {
     /// Timeout in seconds (sandbox is destroyed after this).
     #[serde(default = "default_timeout")]
     pub timeout: u64,
+
+    /// Skills to enable for the opencode agent.
+    /// Omitted = all defaults, empty array = none, ["pdf","docx"] = only those.
+    #[serde(default)]
+    pub skills: Option<Vec<String>>,
+
+    /// Additional MCP servers (merged with the built-in hivebox MCP).
+    /// Format: `{"name": {"type":"remote","url":"...","enabled":true}}`
+    #[serde(default)]
+    pub custom_mcps: Option<serde_json::Value>,
+
+    /// Override LLM base URL (falls back to global HIVEBOX_OPENCODE_BASE_URL).
+    #[serde(default)]
+    pub llm_base_url: Option<String>,
+
+    /// Override LLM API key (falls back to global HIVEBOX_OPENCODE_API_KEY).
+    #[serde(default)]
+    pub llm_api_key: Option<String>,
+
+    /// Override LLM model (falls back to global HIVEBOX_OPENCODE_MODEL).
+    #[serde(default)]
+    pub llm_model: Option<String>,
 }
 
 fn default_memory() -> String { "512m".to_string() }
@@ -47,6 +69,9 @@ pub struct CreateSandboxResponse {
     pub network: NetworkInfoResponse,
     pub limits: LimitsResponse,
     pub expires_at: String,
+    /// URL path for the opencode serve proxy (if running).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opencode_url: Option<String>,
 }
 
 /// Network information in API responses.
@@ -119,6 +144,9 @@ pub struct SandboxSummary {
     pub memory_usage_bytes: u64,
     pub pid_current: u64,
     pub cpu_usage_usec: u64,
+    /// URL path for the opencode serve proxy (if running).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opencode_url: Option<String>,
 }
 
 /// Response for `DELETE /api/v1/hiveboxes/:id`.

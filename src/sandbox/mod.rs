@@ -64,6 +64,31 @@ pub struct SandboxConfig {
 
     /// Command to execute inside the sandbox.
     pub command: String,
+
+    /// Which skills to enable for the opencode agent.
+    /// - `None` (omitted): all default skills from the global skills directory.
+    /// - `Some([])` (empty array): no skills at all.
+    /// - `Some(["pdf", "docx"])`: only the listed skills.
+    #[serde(default)]
+    pub skills: Option<Vec<String>>,
+
+    /// Additional MCP servers to register alongside the built-in hivebox MCP.
+    /// Keys are server names; values follow opencode's MCP config format.
+    /// Example: `{"my-server": {"type": "remote", "url": "...", "enabled": true}}`
+    #[serde(default)]
+    pub custom_mcps: Option<serde_json::Value>,
+
+    /// Override the LLM base URL for this sandbox's opencode agent.
+    #[serde(default)]
+    pub llm_base_url: Option<String>,
+
+    /// Override the LLM API key for this sandbox's opencode agent.
+    #[serde(default)]
+    pub llm_api_key: Option<String>,
+
+    /// Override the LLM model for this sandbox's opencode agent.
+    #[serde(default)]
+    pub llm_model: Option<String>,
 }
 
 impl Default for SandboxConfig {
@@ -74,6 +99,11 @@ impl Default for SandboxConfig {
             limits: ResourceLimits::default(),
             network: NetworkMode::None,
             command: String::new(),
+            skills: None,
+            custom_mcps: None,
+            llm_base_url: None,
+            llm_api_key: None,
+            llm_model: None,
         }
     }
 }

@@ -23,8 +23,10 @@
 pub mod dashboard;
 pub mod handlers;
 pub mod mcp;
+pub mod opencode;
 pub mod types;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::Request;
@@ -32,14 +34,44 @@ use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::Router;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{any, delete, get, post, put};
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
-use crate::sandbox::manager::SandboxManager;
+use crate::sandbox::manager::{DaemonConfig, SandboxManager};
 use handlers::{AppState, SharedState};
+
+/// Reads global opencode configuration from environment variables.
+fn daemon_config_from_env(port: u16, api_key: Option<String>) -> DaemonConfig {
+    let opencode_enabled = std::env::var("HIVEBOX_OPENCODE")
+        .map(|v| v != "false" && v != "0")
+        .unwrap_or(true);
+
+    let skills_path = std::env::var("HIVEBOX_OPENCODE_SKILLS_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/root/.config/opencode/skills"));
+
+    let global_mcps = std::env::var("HIVEBOX_OPENCODE_MCPS")
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok());
+
+    let llm_base_url = std::env::var("HIVEBOX_OPENCODE_BASE_URL").ok();
+    let llm_api_key = std::env::var("HIVEBOX_OPENCODE_API_KEY").ok();
+    let llm_model = std::env::var("HIVEBOX_OPENCODE_MODEL").ok();
+
+    DaemonConfig {
+        port,
+        api_key,
+        opencode_enabled,
+        skills_path,
+        global_mcps,
+        llm_base_url,
+        llm_api_key,
+        llm_model,
+    }
+}
 
 /// Default TCP port for the REST API.
 pub const DEFAULT_PORT: u16 = 7070;
@@ -55,6 +87,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/hiveboxes/{id}/mcp", post(mcp::mcp_handler))
         .route("/api/v1/hiveboxes/{id}/files", put(handlers::upload_file))
         .route("/api/v1/hiveboxes/{id}/files", get(handlers::download_file))
+        .route("/api/v1/hiveboxes/{id}/opencode/{*rest}", any(opencode::opencode_proxy))
         .route("/api/v1/analytics", get(handlers::get_analytics))
         .route("/healthz", get(|| async { "ok" }))
         .route("/dashboard", get(dashboard::dashboard_page))
@@ -65,7 +98,8 @@ pub fn build_router(state: AppState) -> Router {
 
 /// Starts the API server without authentication.
 pub async fn start_server(port: u16) -> anyhow::Result<()> {
-    let manager = Arc::new(SandboxManager::new());
+    let daemon_config = daemon_config_from_env(port, None);
+    let manager = Arc::new(SandboxManager::with_config(daemon_config));
 
     let reaper_manager = manager.clone();
     tokio::spawn(async move {
@@ -91,7 +125,8 @@ pub async fn start_server(port: u16) -> anyhow::Result<()> {
 
 /// Starts the API server with Bearer token authentication.
 pub async fn start_server_with_auth(port: u16, api_key: String) -> anyhow::Result<()> {
-    let manager = Arc::new(SandboxManager::new());
+    let daemon_config = daemon_config_from_env(port, Some(api_key.clone()));
+    let manager = Arc::new(SandboxManager::with_config(daemon_config));
 
     let reaper_manager = manager.clone();
     tokio::spawn(async move {
@@ -126,6 +161,7 @@ fn build_router_with_auth(state: AppState, api_key: String) -> Router {
         .route("/api/v1/hiveboxes/{id}/mcp", post(mcp::mcp_handler))
         .route("/api/v1/hiveboxes/{id}/files", put(handlers::upload_file))
         .route("/api/v1/hiveboxes/{id}/files", get(handlers::download_file))
+        .route("/api/v1/hiveboxes/{id}/opencode/{*rest}", any(opencode::opencode_proxy))
         .route("/api/v1/analytics", get(handlers::get_analytics))
         .layer(middleware::from_fn(move |req, next| {
             let key = api_key.clone();

@@ -82,6 +82,11 @@ fn handle_run(args: cli::RunArgs) -> Result<()> {
         },
         network,
         command,
+        skills: None,
+        custom_mcps: None,
+        llm_base_url: None,
+        llm_api_key: None,
+        llm_model: None,
     };
 
     let result = sandbox::create_and_run(&config)
@@ -116,6 +121,11 @@ fn handle_create(args: cli::CreateArgs) -> Result<()> {
         },
         network,
         command: String::new(),
+        skills: None,
+        custom_mcps: None,
+        llm_base_url: None,
+        llm_api_key: None,
+        llm_model: None,
     };
 
     let rt = tokio::runtime::Runtime::new()?;

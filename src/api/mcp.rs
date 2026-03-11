@@ -194,6 +194,7 @@ async fn handle_tool_call(
         "download_file" => tool_download_file(sandbox_id, args, ctx).await,
         "read_media_file" => tool_read_media_file(manager, sandbox_id, args).await,
         "list_directory_with_sizes" => tool_list_directory_with_sizes(manager, sandbox_id, args).await,
+        "glob" => tool_glob(manager, sandbox_id, args).await,
         _ => Err(anyhow::anyhow!("unknown tool: {name}")),
     };
 
@@ -466,6 +467,32 @@ async fn tool_list_directory_with_sizes(
     let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
     let result = exec_cmd(manager, sandbox_id, &format!("ls -lhS '{path}'")).await?;
     Ok(result.stdout)
+}
+
+async fn tool_glob(
+    manager: &Arc<SandboxManager>,
+    sandbox_id: &str,
+    args: &serde_json::Value,
+) -> anyhow::Result<String> {
+    let pattern = args["pattern"].as_str().ok_or_else(|| anyhow::anyhow!("missing 'pattern'"))?;
+    let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("/workspace");
+
+    let cmd = if pattern.contains('/') {
+        format!(
+            "cd '{path}' && find . -path './{pattern}' -not -path '*/\\.*' 2>/dev/null | head -500 | sed 's|^\\./||' | sort"
+        )
+    } else {
+        format!(
+            "cd '{path}' && find . -name '{pattern}' -not -path '*/\\.*' 2>/dev/null | head -500 | sed 's|^\\./||' | sort"
+        )
+    };
+
+    let result = exec_cmd(manager, sandbox_id, &cmd).await?;
+    if result.stdout.trim().is_empty() {
+        Ok("No files matched the pattern.".to_string())
+    } else {
+        Ok(result.stdout)
+    }
 }
 
 async fn tool_download_file(

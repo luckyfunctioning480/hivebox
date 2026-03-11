@@ -59,7 +59,14 @@ Creates a new persistent sandbox.
   "cpus": 2.0,
   "pids": 128,
   "network": "isolated",
-  "timeout": 3600
+  "timeout": 3600,
+  "skills": ["pdf", "docx"],
+  "custom_mcps": {
+    "my-server": { "type": "remote", "url": "https://example.com/mcp", "enabled": true }
+  },
+  "llm_base_url": "https://api.openai.com/v1",
+  "llm_api_key": "sk-...",
+  "llm_model": "gpt-4o"
 }
 ```
 
@@ -72,6 +79,11 @@ All fields are optional. Defaults:
 | `pids` | `128` | Max processes |
 | `network` | `"none"` | Network mode: `none`, `isolated`, `shared` |
 | `timeout` | `3600` | Auto-destroy timeout in seconds (max 86400) |
+| `skills` | all defaults | Skills for the AI agent. Omit for all, `[]` for none, or list specific names |
+| `custom_mcps` | none | Additional MCP servers (merged with built-in `hivebox` MCP) |
+| `llm_base_url` | global default | LLM API base URL (overrides `HIVEBOX_OPENCODE_BASE_URL`) |
+| `llm_api_key` | global default | LLM API key (overrides `HIVEBOX_OPENCODE_API_KEY`) |
+| `llm_model` | global default | LLM model name (overrides `HIVEBOX_OPENCODE_MODEL`) |
 
 **Response** (`201 Created`):
 ```json
@@ -320,7 +332,7 @@ For local setups, you can also use the `hivebox mcp` CLI command which communica
 
 ### Available tools
 
-Both transports expose 15 tools:
+Both transports expose 16 tools:
 
 | Tool | Description |
 |------|-------------|
@@ -332,6 +344,7 @@ Both transports expose 15 tools:
 | `list_directory` | List directory contents |
 | `directory_tree` | Recursive tree view |
 | `search_files` | Search for text patterns (grep) |
+| `glob` | Find files matching glob patterns (e.g. `**/*.ts`, `*.json`) |
 | `get_file_info` | File metadata (stat) |
 | `create_directory` | Create directories |
 | `move_file` | Move or rename files |
@@ -339,6 +352,162 @@ Both transports expose 15 tools:
 | `download_file` | Download file (supports base64 for binary) |
 | `read_media_file` | Read images/media as base64 with MIME type |
 | `list_directory_with_sizes` | List directory with human-readable sizes |
+
+---
+
+## OpenCode Agent (per-sandbox AI)
+
+Each sandbox automatically gets its own [OpenCode](https://opencode.ai) serve instance. The daemon proxies all requests through a single port so you can interact with the AI agent for any sandbox without managing separate ports.
+
+### Configuration
+
+OpenCode is enabled by default. To disable it, set the `HIVEBOX_OPENCODE` environment variable:
+
+```bash
+# OpenCode enabled (default)
+docker run --privileged --cgroupns=host -p 7070:7070 hivebox
+
+# OpenCode disabled
+docker run --privileged --cgroupns=host -p 7070:7070 -e HIVEBOX_OPENCODE=false hivebox
+```
+
+| Value | Behavior |
+|-------|----------|
+| *(unset)* | Enabled (default) |
+| `true`, `1`, `yes` | Enabled |
+| `false`, `0` | Disabled — no opencode serve is spawned, agent endpoints return 404 |
+
+### Global environment variables
+
+These env vars set defaults for all sandboxes. Per-sandbox overrides can be passed at creation time via the API.
+
+```bash
+docker run --privileged --cgroupns=host -p 7070:7070 \
+  -e HIVEBOX_API_KEY=secret \
+  -e HIVEBOX_OPENCODE_BASE_URL=https://api.openai.com/v1 \
+  -e HIVEBOX_OPENCODE_API_KEY=sk-... \
+  -e HIVEBOX_OPENCODE_MODEL=gpt-4o \
+  -e HIVEBOX_OPENCODE_SKILLS_PATH=/skills \
+  -e 'HIVEBOX_OPENCODE_MCPS={"my-server":{"type":"remote","url":"https://example.com/mcp","enabled":true}}' \
+  -v /host/path/to/skills:/skills \
+  hivebox
+```
+
+| Variable | Description |
+|----------|-------------|
+| `HIVEBOX_OPENCODE_BASE_URL` | Default LLM base URL for all sandboxes |
+| `HIVEBOX_OPENCODE_API_KEY` | Default LLM API key for all sandboxes |
+| `HIVEBOX_OPENCODE_MODEL` | Default LLM model for all sandboxes |
+| `HIVEBOX_OPENCODE_SKILLS_PATH` | Custom skills folder to use instead of the built-in Anthropic skills. Mount it into the container and point here (default: `/root/.config/opencode/skills`) |
+| `HIVEBOX_OPENCODE_MCPS` | JSON object of global MCP servers added to every sandbox |
+| `HIVEBOX_OPENCODE_INSTRUCTIONS` | Custom agent instructions (newline-separated) |
+
+### How it works
+
+1. When a sandbox is created, the daemon spawns `opencode serve` on an internal port (14000+)
+2. OpenCode is preconfigured with an MCP server pointing to the sandbox's MCP endpoint
+3. All requests are proxied through the daemon on the same port (7070)
+
+The `opencode_url` field in the create/list response indicates the proxy base path.
+
+### Base path
+
+```
+/api/v1/hiveboxes/:id/opencode/
+```
+
+All [OpenCode Server API](https://opencode.ai/docs/server) endpoints are available under this path. The daemon forwards method, headers, and body transparently.
+
+### Quick start
+
+**1. Create a sandbox** (opencode starts automatically):
+
+```bash
+curl -X POST http://localhost:7070/api/v1/hiveboxes \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"image":"base"}'
+# Response includes: "opencode_url": "/api/v1/hiveboxes/hb-xxx/opencode/"
+```
+
+**2. Check health**:
+
+```bash
+curl http://localhost:7070/api/v1/hiveboxes/hb-xxx/opencode/global/health \
+  -H "Authorization: Bearer $KEY"
+# {"healthy":true,"version":"1.2.24"}
+```
+
+**3. Connect to the SSE event stream** (real-time events):
+
+```bash
+curl -N http://localhost:7070/api/v1/hiveboxes/hb-xxx/opencode/event \
+  -H "Authorization: Bearer $KEY"
+# data: {"type":"server.connected","properties":{}}
+# data: {"type":"session.status",...}
+# data: {"type":"message.part.delta",...}  (token-by-token streaming)
+```
+
+**4. Create a session**:
+
+```bash
+curl -X POST http://localhost:7070/api/v1/hiveboxes/hb-xxx/opencode/session \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+# {"id":"ses_xxx","slug":"brave-forest",...}
+```
+
+**5. Send a prompt** (async — response streams via SSE):
+
+```bash
+curl -X POST http://localhost:7070/api/v1/hiveboxes/hb-xxx/opencode/session/ses_xxx/prompt_async \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"parts":[{"type":"text","text":"create a hello world python script"}]}'
+```
+
+**6. Abort a running response**:
+
+```bash
+curl -X POST http://localhost:7070/api/v1/hiveboxes/hb-xxx/opencode/session/ses_xxx/abort \
+  -H "Authorization: Bearer $KEY"
+```
+
+### Key SSE event types
+
+| Event | Description |
+|-------|-------------|
+| `server.connected` | SSE connection established |
+| `session.status` | Status change (`busy` / `idle`) |
+| `message.part.delta` | Token-by-token text streaming |
+| `message.part.updated` | Part completed (step-start, step-finish, tool-invocation, tool-result) |
+| `session.updated` | Session metadata changed (title, summary) |
+| `session.idle` | Agent finished processing |
+
+### Available proxy endpoints
+
+All OpenCode server endpoints are proxied. Key ones:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/global/health` | Health check |
+| GET | `/event` | SSE event stream |
+| GET | `/session` | List sessions |
+| POST | `/session` | Create session |
+| GET | `/session/:id` | Get session details |
+| DELETE | `/session/:id` | Delete session |
+| POST | `/session/:id/message` | Send message (sync) |
+| POST | `/session/:id/prompt_async` | Send message (async, use with SSE) |
+| POST | `/session/:id/abort` | Abort running response |
+| GET | `/session/:id/message` | List messages |
+| GET | `/provider` | List available AI providers/models |
+| GET | `/config` | Get configuration |
+| GET | `/doc` | OpenAPI 3.1 spec |
+
+### Dashboard
+
+The web dashboard at `/dashboard` includes an **Agent** tab in the sidebar for each sandbox. Click the blue "Agent" button on any sandbox row to open a real-time chat interface that connects via SSE and streams events directly.
 
 ---
 

@@ -50,6 +50,11 @@ pub async fn create_sandbox(
         },
         network: req.network.clone(),
         command: String::new(),
+        skills: req.skills,
+        custom_mcps: req.custom_mcps,
+        llm_base_url: req.llm_base_url,
+        llm_api_key: req.llm_api_key,
+        llm_model: req.llm_model,
     };
 
     let sandbox_id = manager.create(config, req.timeout).await.map_err(|e| {
@@ -89,19 +94,25 @@ pub async fn list_sandboxes(
 
     let summaries: Vec<SandboxSummary> = sandboxes
         .into_iter()
-        .map(|s| SandboxSummary {
-            id: s.id,
-            status: format!("{:?}", s.state).to_lowercase(),
-            image: s.image,
-            uptime_seconds: s.uptime_seconds,
-            ttl_seconds: s.ttl_seconds,
-            memory: s.memory_limit.clone(),
-            cpus: s.cpu_limit,
-            commands_executed: s.commands_executed,
-            network: s.network_mode.clone(),
-            memory_usage_bytes: s.memory_usage_bytes,
-            pid_current: s.pid_current,
-            cpu_usage_usec: s.cpu_usage_usec,
+        .map(|s| {
+            let opencode_url = s.opencode_port.map(|_| {
+                format!("/api/v1/hiveboxes/{}/opencode/", s.id)
+            });
+            SandboxSummary {
+                id: s.id,
+                status: format!("{:?}", s.state).to_lowercase(),
+                image: s.image,
+                uptime_seconds: s.uptime_seconds,
+                ttl_seconds: s.ttl_seconds,
+                memory: s.memory_limit.clone(),
+                cpus: s.cpu_limit,
+                commands_executed: s.commands_executed,
+                network: s.network_mode.clone(),
+                memory_usage_bytes: s.memory_usage_bytes,
+                pid_current: s.pid_current,
+                cpu_usage_usec: s.cpu_usage_usec,
+                opencode_url,
+            }
         })
         .collect();
 
@@ -268,6 +279,9 @@ pub async fn get_analytics(
 
 /// Helper: build a CreateSandboxResponse from SandboxInfo.
 fn create_response_from_info(info: &SandboxInfo) -> CreateSandboxResponse {
+    let opencode_url = info.opencode_port.map(|_| {
+        format!("/api/v1/hiveboxes/{}/opencode/", info.id)
+    });
     CreateSandboxResponse {
         id: info.id.clone(),
         status: format!("{:?}", info.state).to_lowercase(),
@@ -283,5 +297,6 @@ fn create_response_from_info(info: &SandboxInfo) -> CreateSandboxResponse {
             pids: info.pid_limit,
         },
         expires_at: info.expires_at.clone(),
+        opencode_url,
     }
 }

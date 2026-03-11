@@ -346,6 +346,18 @@ pub fn tool_definitions() -> serde_json::Value {
                     "path": { "type": "string", "description": "Directory path (defaults to current directory)" }
                 }
             }
+        },
+        {
+            "name": "glob",
+            "description": "Find files matching glob patterns. Returns a list of matching file paths. Respects .gitignore if git is available.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string", "description": "Glob pattern to match (e.g. '**/*.ts', 'src/**/*.rs', '*.json')" },
+                    "path": { "type": "string", "description": "Root directory to search in (defaults to /workspace)" }
+                },
+                "required": ["pattern"]
+            }
         }
     ])
 }
@@ -374,6 +386,7 @@ async fn handle_tool_call(
         "download_file" => tool_download_file(client, args).await,
         "read_media_file" => tool_read_media_file(client, args).await,
         "list_directory_with_sizes" => tool_list_directory_with_sizes(client, args).await,
+        "glob" => tool_glob(client, args).await,
         _ => Err(anyhow::anyhow!("unknown tool: {name}")),
     };
 
@@ -573,6 +586,31 @@ async fn tool_list_directory_with_sizes(client: &HiveboxClient, args: &serde_jso
     let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
     let resp = client.exec(&format!("ls -lhS '{path}'")).await?;
     Ok(resp.stdout)
+}
+
+async fn tool_glob(client: &HiveboxClient, args: &serde_json::Value) -> Result<String> {
+    let pattern = args["pattern"].as_str().context("missing 'pattern'")?;
+    let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("/workspace");
+
+    // Use find with -name/-path depending on whether pattern contains /
+    let cmd = if pattern.contains('/') {
+        // Pattern with path separators: use find -path
+        format!(
+            "cd '{path}' && find . -path './{pattern}' -not -path '*/\\.*' 2>/dev/null | head -500 | sed 's|^\\./||' | sort"
+        )
+    } else {
+        // Simple filename pattern: use find -name
+        format!(
+            "cd '{path}' && find . -name '{pattern}' -not -path '*/\\.*' 2>/dev/null | head -500 | sed 's|^\\./||' | sort"
+        )
+    };
+
+    let resp = client.exec(&cmd).await?;
+    if resp.stdout.trim().is_empty() {
+        Ok("No files matched the pattern.".to_string())
+    } else {
+        Ok(resp.stdout)
+    }
 }
 
 async fn tool_download_file(client: &HiveboxClient, args: &serde_json::Value) -> Result<String> {

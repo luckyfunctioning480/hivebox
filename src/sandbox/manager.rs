@@ -15,6 +15,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{bail, Context, Result};
@@ -90,6 +91,12 @@ struct ManagedSandbox {
     /// Accumulated CPU microseconds from completed exec commands.
     /// Added to live namespace CPU to avoid losing short-lived command contributions.
     cumulative_cpu_usec: u64,
+    /// Port of the opencode serve instance for this sandbox (if running).
+    opencode_port: Option<u16>,
+    /// PID of the opencode serve process (host PID, for cleanup).
+    opencode_pid: Option<u32>,
+    /// Path to the temporary opencode config directory.
+    opencode_config_dir: Option<PathBuf>,
 }
 
 /// Public snapshot of sandbox state (for API responses).
@@ -111,7 +118,37 @@ pub struct SandboxInfo {
     pub memory_usage_bytes: u64,
     pub pid_current: u64,
     pub cpu_usage_usec: u64,
+    /// Port of the opencode serve instance (if running).
+    pub opencode_port: Option<u16>,
 }
+
+/// Configuration for the daemon, passed to the manager so it can spawn
+/// opencode serve instances that connect back to the correct API endpoint.
+#[derive(Clone)]
+pub struct DaemonConfig {
+    /// Port the hivebox daemon listens on.
+    pub port: u16,
+    /// API key (if auth is enabled).
+    pub api_key: Option<String>,
+    /// Whether to spawn opencode serve for each sandbox.
+    pub opencode_enabled: bool,
+    /// Source directory to copy skills from into each sandbox's opencode config.
+    /// Default: `/root/.config/opencode/skills` (Anthropic skills downloaded at build time).
+    /// Set `HIVEBOX_OPENCODE_SKILLS_PATH` to use a custom folder mounted into the container.
+    pub skills_path: PathBuf,
+    /// Global MCP servers (JSON object) added to every sandbox.
+    /// Set via `HIVEBOX_OPENCODE_MCPS='{"name":{"type":"remote","url":"..."}}'`.
+    pub global_mcps: Option<serde_json::Value>,
+    /// Global LLM base URL. Set via `HIVEBOX_OPENCODE_BASE_URL`.
+    pub llm_base_url: Option<String>,
+    /// Global LLM API key. Set via `HIVEBOX_OPENCODE_API_KEY`.
+    pub llm_api_key: Option<String>,
+    /// Global LLM model. Set via `HIVEBOX_OPENCODE_MODEL`.
+    pub llm_model: Option<String>,
+}
+
+/// Base port for internal opencode serve instances.
+const OPENCODE_BASE_PORT: u16 = 14000;
 
 /// Thread-safe sandbox lifecycle manager.
 pub struct SandboxManager {
@@ -119,14 +156,33 @@ pub struct SandboxManager {
     metrics_history: RwLock<VecDeque<MetricsSample>>,
     /// Previous CPU jiffies snapshot for calculating CPU%.
     prev_cpu: RwLock<Option<(u64, u64)>>, // (total_jiffies, idle_jiffies)
+    /// Next port to allocate for opencode serve instances.
+    next_opencode_port: AtomicU16,
+    /// Daemon configuration for opencode MCP bridge.
+    daemon_config: DaemonConfig,
 }
 
 impl SandboxManager {
     pub fn new() -> Self {
+        Self::with_config(DaemonConfig {
+            port: 7070,
+            api_key: None,
+            opencode_enabled: true,
+            skills_path: PathBuf::from("/root/.config/opencode/skills"),
+            global_mcps: None,
+            llm_base_url: None,
+            llm_api_key: None,
+            llm_model: None,
+        })
+    }
+
+    pub fn with_config(daemon_config: DaemonConfig) -> Self {
         Self {
             sandboxes: RwLock::new(HashMap::new()),
             metrics_history: RwLock::new(VecDeque::with_capacity(METRICS_HISTORY_MAX + 1)),
             prev_cpu: RwLock::new(None),
+            next_opencode_port: AtomicU16::new(OPENCODE_BASE_PORT),
+            daemon_config,
         }
     }
 
@@ -199,13 +255,227 @@ impl SandboxManager {
             cwd: "/workspace".to_string(),
             commands_executed: 0,
             cumulative_cpu_usec: 0,
+            opencode_port: None,
+            opencode_pid: None,
+            opencode_config_dir: None,
         };
 
         self.sandboxes.write().await.insert(sandbox_id.clone(), sandbox);
 
+        // Spawn an opencode serve instance for this sandbox (if enabled).
+        if self.daemon_config.opencode_enabled {
+            if let Err(e) = self.spawn_opencode(&sandbox_id).await {
+                warn!(sandbox = sandbox_id, error = %e, "failed to spawn opencode serve (non-fatal)");
+            }
+        }
+
         info!(sandbox = sandbox_id, "sandbox created successfully");
 
         Ok(sandbox_id)
+    }
+
+    /// Spawns an `opencode serve` instance for a sandbox.
+    ///
+    /// Creates a temporary config directory with an `opencode.jsonc` that
+    /// connects to this sandbox's MCP endpoint, then starts `opencode serve`
+    /// on an auto-assigned port.
+    ///
+    /// Respects per-sandbox overrides for skills, MCPs, and LLM config,
+    /// falling back to global defaults from `DaemonConfig` / env vars.
+    async fn spawn_opencode(&self, sandbox_id: &str) -> Result<()> {
+        let port = self.next_opencode_port.fetch_add(1, Ordering::Relaxed);
+        let daemon_port = self.daemon_config.port;
+
+        // Read sandbox-specific config before we build the opencode config.
+        let (skills, custom_mcps, llm_base_url, llm_api_key, llm_model) = {
+            let sandboxes = self.sandboxes.read().await;
+            let sb = sandboxes.get(sandbox_id)
+                .context("sandbox not found while spawning opencode")?;
+            (
+                sb.config.skills.clone(),
+                sb.config.custom_mcps.clone(),
+                sb.config.llm_base_url.clone(),
+                sb.config.llm_api_key.clone(),
+                sb.config.llm_model.clone(),
+            )
+        };
+
+        // Build the MCP URL pointing back to this sandbox.
+        let mcp_url = format!(
+            "http://127.0.0.1:{daemon_port}/api/v1/hiveboxes/{sandbox_id}/mcp"
+        );
+
+        // Create temp config directory.
+        let config_dir = PathBuf::from(format!("/tmp/hivebox-opencode/{sandbox_id}"));
+        let opencode_dir = config_dir.join("opencode");
+        std::fs::create_dir_all(&opencode_dir)
+            .with_context(|| format!("failed to create opencode config dir: {}", opencode_dir.display()))?;
+
+        // Build the opencode config JSON.
+        let mut mcp_headers = serde_json::Map::new();
+        if let Some(ref key) = self.daemon_config.api_key {
+            mcp_headers.insert(
+                "Authorization".to_string(),
+                serde_json::Value::String(format!("Bearer {key}")),
+            );
+        }
+
+        // Build instructions for the AI agent.
+        let default_instructions = vec![
+            format!("You are operating inside a HiveBox sandbox (ID: {sandbox_id}) running Alpine Linux (musl libc)."),
+            "Use apk for package management (e.g., `apk add python3`).".to_string(),
+            "The sandbox has limited resources and no persistent storage — files are lost on destroy.".to_string(),
+            "Use the MCP tools available to you (exec, read_file, write_file, etc.) to interact with the sandbox filesystem.".to_string(),
+        ];
+        let instructions: Vec<String> = std::env::var("HIVEBOX_OPENCODE_INSTRUCTIONS")
+            .map(|s| s.lines().map(|l| l.to_string()).collect())
+            .unwrap_or(default_instructions);
+
+        // Build the MCP section: hivebox (always present) + global MCPs + per-sandbox MCPs.
+        let mut mcp_section = serde_json::Map::new();
+        mcp_section.insert("hivebox".to_string(), serde_json::json!({
+            "type": "remote",
+            "url": mcp_url,
+            "headers": mcp_headers,
+            "enabled": true
+        }));
+
+        // Merge global MCPs from HIVEBOX_MCPS env var.
+        if let Some(ref global) = self.daemon_config.global_mcps {
+            if let Some(map) = global.as_object() {
+                for (key, value) in map {
+                    if key != "hivebox" {
+                        mcp_section.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+
+        // Merge per-sandbox custom MCPs (overrides globals, but never hivebox).
+        if let Some(ref custom) = custom_mcps {
+            if let Some(map) = custom.as_object() {
+                for (key, value) in map {
+                    if key != "hivebox" {
+                        mcp_section.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+
+        // Build LLM provider config if base_url + model are provided.
+        // Resolution: per-sandbox > global (DaemonConfig) > opencode defaults.
+        let eff_base_url = llm_base_url.as_ref().or(self.daemon_config.llm_base_url.as_ref());
+        let eff_api_key = llm_api_key.as_ref().or(self.daemon_config.llm_api_key.as_ref());
+        let eff_model = llm_model.as_ref().or(self.daemon_config.llm_model.as_ref());
+
+        let mut config_json = serde_json::json!({
+            "$schema": "https://opencode.ai/config.json",
+            "instructions": instructions,
+            "permission": {
+                "*": "deny",
+                "hivebox_*": "allow",
+                "todowrite": "allow",
+                "todoread": "allow",
+                "task": "allow",
+                "skill": "allow"
+            },
+            "mcp": mcp_section
+        });
+
+        // If LLM config is provided, generate a custom provider in the config file.
+        // OpenCode expects: provider section + "model": "provider_id/model_id".
+        if let (Some(base_url), Some(model_name)) = (eff_base_url, eff_model) {
+            let mut provider_options = serde_json::json!({
+                "baseURL": base_url
+            });
+            if let Some(key) = eff_api_key {
+                provider_options["apiKey"] = serde_json::Value::String(key.clone());
+            }
+
+            config_json["provider"] = serde_json::json!({
+                "hivebox-llm": {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "name": "HiveBox LLM",
+                    "options": provider_options,
+                    "models": {
+                        model_name: {
+                            "name": model_name
+                        }
+                    }
+                }
+            });
+            config_json["model"] = serde_json::Value::String(format!("hivebox-llm/{model_name}"));
+        }
+
+        let config_path = opencode_dir.join("opencode.jsonc");
+        std::fs::write(&config_path, serde_json::to_string_pretty(&config_json)?)
+            .with_context(|| format!("failed to write opencode config: {}", config_path.display()))?;
+
+        // Copy skills into the sandbox's opencode config directory.
+        // Priority: per-sandbox skills list > global skills_path from config/env.
+        let global_skills = &self.daemon_config.skills_path;
+        let sandbox_skills = opencode_dir.join("skills");
+        if global_skills.is_dir() {
+            match &skills {
+                None => {
+                    // No skills specified: copy all from global.
+                    copy_dir_recursive(global_skills, &sandbox_skills)
+                        .with_context(|| "failed to copy skills")?;
+                }
+                Some(list) if list.is_empty() => {
+                    // Explicitly empty: no skills at all.
+                    debug!(sandbox = sandbox_id, "skills disabled for this sandbox");
+                }
+                Some(list) => {
+                    // Specific skill names: copy only those that exist.
+                    std::fs::create_dir_all(&sandbox_skills)?;
+                    for name in list {
+                        let src = global_skills.join(name);
+                        if src.is_dir() {
+                            copy_dir_recursive(&src, &sandbox_skills.join(name))?;
+                        } else {
+                            warn!(sandbox = sandbox_id, skill = name.as_str(), "skill not found, skipping");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Spawn opencode serve.
+        let mut cmd = Command::new("opencode");
+        cmd.args(["serve", "--port", &port.to_string()])
+            .env("XDG_CONFIG_HOME", &config_dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+
+        let child = cmd.spawn()
+            .with_context(|| "failed to spawn opencode serve — is opencode installed?")?;
+
+        let pid = child.id();
+
+        info!(
+            sandbox = sandbox_id,
+            opencode_port = port,
+            opencode_pid = pid,
+            "opencode serve started"
+        );
+
+        // Store in sandbox state.
+        let mut sandboxes = self.sandboxes.write().await;
+        if let Some(s) = sandboxes.get_mut(sandbox_id) {
+            s.opencode_port = Some(port);
+            s.opencode_pid = Some(pid);
+            s.opencode_config_dir = Some(config_dir);
+        }
+
+        Ok(())
+    }
+
+    /// Returns the opencode serve port for a sandbox, if running.
+    pub async fn get_opencode_port(&self, sandbox_id: &str) -> Option<u16> {
+        let sandboxes = self.sandboxes.read().await;
+        sandboxes.get(sandbox_id).and_then(|s| s.opencode_port)
     }
 
     /// Executes a command inside an existing sandbox.
@@ -604,6 +874,20 @@ fn spawn_init_process(
 
 /// Cleans up all resources for a sandbox.
 fn destroy_sandbox_resources(sandbox: &ManagedSandbox) {
+    // Kill opencode serve process if running.
+    if let Some(pid) = sandbox.opencode_pid {
+        info!(sandbox = sandbox.id, opencode_pid = pid, "killing opencode serve");
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid as i32),
+            nix::sys::signal::Signal::SIGTERM,
+        );
+    }
+
+    // Clean up opencode config directory.
+    if let Some(ref dir) = sandbox.opencode_config_dir {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     if let Some(pid) = sandbox.init_pid {
         let _ = nix::sys::signal::kill(
             nix::unistd::Pid::from_raw(pid),
@@ -678,7 +962,24 @@ fn sandbox_to_info(s: &ManagedSandbox) -> SandboxInfo {
         memory_usage_bytes: mem_usage,
         pid_current: pid_cur,
         cpu_usage_usec: cpu_usec,
+        opencode_port: s.opencode_port,
     }
+}
+
+/// Recursively copy a directory tree.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let dest = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &dest)?;
+        } else {
+            std::fs::copy(entry.path(), &dest)?;
+        }
+    }
+    Ok(())
 }
 
 fn format_bytes(bytes: u64) -> String {

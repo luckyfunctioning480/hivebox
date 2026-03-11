@@ -51,7 +51,7 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 base64 = "0.22"
 
 # HTTP client for MCP server → daemon API bridge
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 
 # Seccomp-BPF syscall filtering (from rust-vmm)
 seccompiler = "0.4"

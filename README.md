@@ -2,15 +2,11 @@
   <img src="assets/logo.svg" alt="HiveBox" height="60">
 </p>
 
-<p align="center">
-  <img src="assets/teti-logo.svg" alt="TetiAI" height="17"> <a href="https://teti.ai/hub">Build by TetiAI</a>
-</p>
-
 **Native Linux sandboxing built for the AI era.**
 
 HiveBox turns Alpine Linux into a platform where sandboxing is a first-class primitive. No containers, no VMs — just direct kernel isolation (namespaces, cgroups, seccomp, Landlock) exposed through a simple CLI and REST API.
 
-Each **hivebox** is a lightweight, isolated Linux sandbox. Launch thousands on a single host, each capable of running arbitrary commands in complete isolation with near-zero overhead.
+Each **hivebox** is a lightweight, isolated Linux sandbox with its own [OpenCode](https://opencode.ai) AI agent. Launch thousands on a single host — each running arbitrary commands in complete isolation with near-zero overhead, and each with a dedicated AI coding assistant accessible via API or the built-in web dashboard.
 
 ![HiveBox Dashboard](assets/screen.png)
 
@@ -111,7 +107,38 @@ hivebox create --name myworkspace --memory 512m
 }
 ```
 
-3. The AI client now has 15 tools to operate inside the sandbox: `exec`, `read_file`, `read_multiple_files`, `write_file`, `edit_file`, `list_directory`, `directory_tree`, `search_files`, `get_file_info`, `create_directory`, `move_file`, `upload_file`, `download_file`, `read_media_file`, `list_directory_with_sizes`.
+3. The AI client now has 16 tools to operate inside the sandbox: `exec`, `read_file`, `read_multiple_files`, `write_file`, `edit_file`, `list_directory`, `directory_tree`, `search_files`, `glob`, `get_file_info`, `create_directory`, `move_file`, `upload_file`, `download_file`, `read_media_file`, `list_directory_with_sizes`.
+
+### OpenCode Agent — AI per Sandbox
+
+Each sandbox automatically gets its own [OpenCode](https://opencode.ai) AI agent, accessible through the same daemon port. No extra setup — create a sandbox and start chatting.
+
+OpenCode doesn't run *inside* the sandbox — it runs as a separate `opencode serve` process on the host, connected to the hivebox via MCP. The daemon proxies all requests through port 7070, so each sandbox's agent is accessible at `/api/v1/hiveboxes/{id}/opencode/` without exposing internal ports.
+
+```bash
+# Create a sandbox (opencode starts automatically)
+curl -X POST http://localhost:7070/api/v1/hiveboxes \
+  -H "Authorization: Bearer mysecretkey" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-agent"}'
+
+# Connect to the real-time event stream (SSE)
+curl -N http://localhost:7070/api/v1/hiveboxes/my-agent/opencode/event \
+  -H "Authorization: Bearer mysecretkey"
+
+# Create a session
+curl -X POST http://localhost:7070/api/v1/hiveboxes/my-agent/opencode/session \
+  -H "Authorization: Bearer mysecretkey" \
+  -H "Content-Type: application/json" -d '{}'
+
+# Send a prompt (response streams via SSE)
+curl -X POST http://localhost:7070/api/v1/hiveboxes/my-agent/opencode/session/{SESSION_ID}/prompt_async \
+  -H "Authorization: Bearer mysecretkey" \
+  -H "Content-Type: application/json" \
+  -d '{"parts":[{"type":"text","text":"create a hello world script"}]}'
+```
+
+OpenCode is enabled by default. Disable it with `HIVEBOX_OPENCODE=false`.
 
 ### Web Dashboard
 
@@ -126,8 +153,9 @@ The dashboard provides:
 - Login with API key
 - Create, list, and destroy hiveboxes
 - Built-in terminal to execute commands in any hivebox
+- **Agent playground** with real-time SSE streaming for each hivebox
 - Real-time hivebox status (uptime, TTL, resource usage, command count)
-- Auto-refresh every 10 seconds
+- Auto-refresh every 5 seconds
 
 No external dependencies — everything is embedded in the binary.
 
@@ -208,9 +236,17 @@ docker run --privileged --cgroupns=host -p 7070:7070 \
 
 **Environment variables:**
 
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `HIVEBOX_API_KEY` | API key for authentication (`Authorization: Bearer <key>`) | No (but recommended) |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `HIVEBOX_API_KEY` | API key for authentication (`Authorization: Bearer <key>`) | *(none — auth disabled)* |
+| `HIVEBOX_OPENCODE` | Enable OpenCode agent per sandbox (`true`/`false`) | `true` |
+| `HIVEBOX_OPENCODE_BASE_URL` | Default LLM base URL for all sandboxes | *(opencode default)* |
+| `HIVEBOX_OPENCODE_API_KEY` | Default LLM API key for all sandboxes | *(opencode default)* |
+| `HIVEBOX_OPENCODE_MODEL` | Default LLM model for all sandboxes | *(opencode default)* |
+| `HIVEBOX_OPENCODE_SKILLS_PATH` | Path to skills directory (mount custom skills) | `/root/.config/opencode/skills` |
+| `HIVEBOX_OPENCODE_MCPS` | JSON of global MCP servers added to every sandbox | *(none)* |
+
+All LLM and MCP settings can be overridden per-sandbox at creation time via the API (see [API docs](docs/api.md)).
 
 > **Note**: `--privileged` is required for Linux namespaces, cgroups, and mount operations.
 > `--cgroupns=host` gives access to the host cgroup hierarchy, needed for memory/CPU/PID limits on hiveboxes. Without it, hiveboxes still work but without resource limits.
@@ -253,6 +289,7 @@ See [docs/deployment.md](docs/deployment.md) for full production setup.
 | `GET` | `/api/v1/hiveboxes/:id/files` | Download file |
 | `DELETE` | `/api/v1/hiveboxes/:id` | Destroy hivebox |
 | `GET` | `/api/v1/analytics` | Metrics history |
+| `ANY` | `/api/v1/hiveboxes/:id/opencode/*` | OpenCode agent proxy |
 
 See [docs/api.md](docs/api.md) for full API reference.
 
@@ -270,4 +307,4 @@ HiveBox is **experimental software** under active development. It is **not produ
 
 ## License
 
-BSD 3 — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

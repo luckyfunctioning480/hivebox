@@ -185,6 +185,32 @@ body.pg-open main{margin-right:560px}
 .term-ps1{color:#eac01b;font-family:'JetBrains Mono','Fira Code',monospace;font-size:13px;margin-right:8px;white-space:nowrap}
 .term-input{flex:1;background:transparent;border:none;outline:none;color:#d4d4d4;font-family:'JetBrains Mono','Fira Code',monospace;font-size:13px;caret-color:#eac01b}
 .term-input::placeholder{color:#444}
+/* Agent panel */
+.agent-output{flex:1;background:#0c0c0c;padding:16px;font-family:'JetBrains Mono','Fira Code',monospace;font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-all;overflow-y:auto;color:#d4d4d4;scrollbar-width:thin;scrollbar-color:#333 transparent}
+.agent-output::-webkit-scrollbar{width:6px}
+.agent-output::-webkit-scrollbar-thumb{background:#333;border-radius:3px}
+.agent-output .ev-type{color:#eac01b;font-weight:600;font-size:11px}
+.agent-output .ev-time{color:#555;font-size:10px;margin-left:8px}
+.agent-output .ev-data{color:#a1a1aa;font-size:12px;margin-left:12px;display:block}
+.agent-output .ev-text{color:#4ade80}
+.agent-output .ev-reason{color:#f97316}
+.agent-output .ev-tool{color:#3b82f6}
+.agent-output .ev-err{color:#f87171}
+.agent-output .ev-status{color:#a78bfa;font-weight:600}
+.agent-output .ev-sep{display:block;border-bottom:1px solid #1a1a1a;margin:6px 0}
+.agent-input-row{display:flex;align-items:center;border-top:1px solid #2a2a2a;background:#111;padding:0 12px;flex-shrink:0;min-height:44px;gap:6px}
+.agent-input{flex:1;background:transparent;border:none;outline:none;color:#d4d4d4;font-family:'JetBrains Mono','Fira Code',monospace;font-size:13px;caret-color:#eac01b;padding:10px 4px}
+.agent-input::placeholder{color:#444}
+.agent-send{background:var(--pri);color:#000;border:none;border-radius:4px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:background .15s}
+.agent-send:hover{background:var(--pri2)}
+.agent-send:disabled{opacity:.4;cursor:default}
+.agent-abort{background:transparent;color:var(--red);border:1px solid rgba(239,68,68,.3);border-radius:4px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;display:none}
+.agent-abort.on{display:inline-block}
+.agent-status-bar{display:flex;align-items:center;gap:8px;padding:4px 12px;background:#111;border-top:1px solid #1a1a1a;font-size:11px;color:#555;flex-shrink:0}
+.agent-status-bar .dot{width:6px;height:6px;border-radius:50%;background:#555}
+.agent-status-bar .dot.connected{background:#22c55e}
+.agent-status-bar .dot.busy{background:#eac01b;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 /* Playground */
 @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 @media(max-width:1100px){.pg-sidebar{width:100%;border-left:none}body.pg-open main{margin-right:0}}
@@ -340,7 +366,8 @@ body.pg-open main{margin-right:560px}
 <div class="pg-sidebar" id="pg-sidebar">
   <div class="pg-titlebar">
     <div class="pg-tabs">
-      <button class="pg-tab active" id="pg-tab-term"><span class="pg-tab-icon">&#9658;</span> Terminal</button>
+      <button class="pg-tab active" id="pg-tab-term" onclick="pgSwitchTab('term')"><span class="pg-tab-icon">&#9658;</span> Terminal</button>
+      <button class="pg-tab" id="pg-tab-agent" onclick="pgSwitchTab('agent')"><span class="pg-tab-icon">&#9679;</span> Agent</button>
     </div>
     <span id="pg-sandbox-id" style="color:#71717a;font-size:11px;font-family:'JetBrains Mono','Fira Code',monospace;margin-right:8px"></span>
     <button class="pg-close" onclick="closePlayground()">&times;</button>
@@ -353,6 +380,22 @@ body.pg-open main{margin-right:560px}
     <div class="term-input-row">
       <span class="term-ps1" id="term-ps1">$</span>
       <input type="text" class="term-input" id="ex-cmd" placeholder="type command..." onkeydown="termKeydown(event)">
+    </div>
+  </div>
+  <!-- Agent panel -->
+  <div class="pg-panel" id="pg-panel-agent">
+    <div class="agent-output" id="ag-out"><span class="si">~ Agent playground</span>
+<span class="si">~ Send a prompt to interact with the AI agent</span>
+</div>
+    <div class="agent-input-row">
+      <input type="text" class="agent-input" id="ag-input" placeholder="send a prompt..." onkeydown="if(event.key==='Enter')agentSend()">
+      <button class="agent-abort" id="ag-abort" onclick="agentAbort()">Stop</button>
+      <button class="agent-send" id="ag-send" onclick="agentSend()">Send</button>
+    </div>
+    <div class="agent-status-bar">
+      <span class="dot" id="ag-dot"></span>
+      <span id="ag-status">Disconnected</span>
+      <span style="margin-left:auto" id="ag-session"></span>
     </div>
   </div>
 </div>
@@ -378,6 +421,27 @@ body.pg-open main{margin-right:560px}
       <label>Timeout (seconds)</label>
       <input type="number" id="c-tout" value="3600" min="60" max="86400">
     </div>
+    <details style="margin-top:12px">
+      <summary style="cursor:pointer;color:#888;font-size:13px;user-select:none">Advanced (LLM, Skills, MCPs)</summary>
+      <div style="margin-top:8px">
+        <div class="form-row">
+          <div class="field" style="flex:2"><label>LLM Base URL</label><input type="text" id="c-llm-url" placeholder="Global default"></div>
+          <div class="field" style="flex:1"><label>Model</label><input type="text" id="c-llm-model" placeholder="Global default"></div>
+        </div>
+        <div class="field">
+          <label>LLM API Key</label>
+          <input type="password" id="c-llm-key" placeholder="Global default">
+        </div>
+        <div class="field">
+          <label>Skills</label>
+          <input type="text" id="c-skills" placeholder="All defaults. Comma-separated names or &quot;none&quot;">
+        </div>
+        <div class="field">
+          <label>Custom MCPs (JSON)</label>
+          <textarea id="c-mcps" rows="3" style="width:100%;font-family:monospace;font-size:12px;background:#1e1e1e;color:#d4d4d4;border:1px solid #333;border-radius:4px;padding:6px" placeholder='{"my-server":{"type":"remote","url":"...","enabled":true}}'></textarea>
+        </div>
+      </div>
+    </details>
     <div class="modal-actions">
       <button class="btn" onclick="closeCreate()">Cancel</button>
       <button class="btn btn-pri" onclick="doCreate()">Create</button>
@@ -702,6 +766,7 @@ async function refresh(){
       <td class="mono">${x.pid_current||0}</td>
       <td style="text-align:right">
         <button class="btn btn-sm" style="color:var(--pri);border-color:rgba(234,192,27,.3)" onclick="openPlayground('${esc(x.id)}')">Terminal</button>
+        <button class="btn btn-sm" style="color:var(--blue);border-color:rgba(59,130,246,.3)" onclick="openPlayground('${esc(x.id)}','agent')">Agent</button>
         <button class="btn btn-sm btn-red" onclick="destroy('${esc(x.id)}')">Destroy</button>
       </td></tr>`;
   }
@@ -722,6 +787,20 @@ async function doCreate(){
   if(nm)b.name=nm;
   const nv=document.getElementById('c-net').value;
   if(nv!=='none')b.network=nv;
+  // LLM config
+  const llmUrl=document.getElementById('c-llm-url').value.trim();
+  const llmKey=document.getElementById('c-llm-key').value.trim();
+  const llmModel=document.getElementById('c-llm-model').value.trim();
+  if(llmUrl)b.llm_base_url=llmUrl;
+  if(llmKey)b.llm_api_key=llmKey;
+  if(llmModel)b.llm_model=llmModel;
+  // Skills
+  const sk=document.getElementById('c-skills').value.trim();
+  if(sk==='none')b.skills=[];
+  else if(sk)b.skills=sk.split(',').map(s=>s.trim()).filter(Boolean);
+  // Custom MCPs
+  const mcpRaw=document.getElementById('c-mcps').value.trim();
+  if(mcpRaw){try{b.custom_mcps=JSON.parse(mcpRaw)}catch(e){toast('Invalid MCP JSON: '+e.message,false);return}}
   const{s,d}=await api('POST','/api/v1/hiveboxes',b);
   if(s===200||s===201){toast('HiveBox created: '+(d.id||'ok'));closeCreate();refresh()}
   else toast(d.error||'Error '+s,false);
@@ -751,33 +830,44 @@ function shortCwd(){
 }
 function updatePs1(){document.getElementById('term-ps1').textContent=shortCwd()+' $';}
 
-function openPlayground(id){
+function openPlayground(id,tab){
   const isNewSandbox=(PG_CUR!==id);
   PG_CUR=id;CUR=id;
   document.getElementById('pg-sidebar').classList.add('open');
   document.body.classList.add('pg-open');
   document.getElementById('pg-sandbox-id').textContent=id;
-  // Init terminal for new sandbox
   if(isNewSandbox){
     CWD='/workspace';updatePs1();
     document.getElementById('ex-out').innerHTML='<span class="si">~ Connected to <span class="prompt">'+esc(id)+'</span></span>\n<span class="si">~ Type a command and press Enter</span>\n';
     document.getElementById('ex-cmd').value='';
     PG_TERM_INITED[id]=true;
+    // Reconnect agent for new sandbox
+    if(AG_EVT){AG_EVT.close();AG_EVT=null;}
+    AG_SES=null;AG_BOX=null;
+    document.getElementById('ag-dot').className='dot';
+    document.getElementById('ag-status').textContent='Disconnected';
+    document.getElementById('ag-session').textContent='';
+    document.getElementById('ag-out').innerHTML='<span class="si">~ Agent playground</span>\n<span class="si">~ Switch to Agent tab to connect</span>\n';
   }
-  pgSwitchTab('term');
+  pgSwitchTab(tab||'term');
 }
 
 function closePlayground(){
   PG_CUR=null;CUR=null;
   document.getElementById('pg-sidebar').classList.remove('open');
   document.body.classList.remove('pg-open');
+  if(AG_EVT){AG_EVT.close();AG_EVT=null;}
+  AG_SES=null;AG_BUSY=false;AG_BOX=null;
 }
 
 function pgSwitchTab(tab){
   PG_TAB=tab;
-  document.getElementById('pg-tab-term').classList.add('active');
-  document.getElementById('pg-panel-term').classList.add('active');
-  document.getElementById('ex-cmd').focus();
+  document.querySelectorAll('.pg-tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.pg-panel').forEach(p=>p.classList.remove('active'));
+  document.getElementById('pg-tab-'+tab).classList.add('active');
+  document.getElementById('pg-panel-'+tab).classList.add('active');
+  if(tab==='term')document.getElementById('ex-cmd').focus();
+  if(tab==='agent'){document.getElementById('ag-input').focus();if(PG_CUR&&!AG_EVT)agentConnect(PG_CUR);}
 }
 
 function termKeydown(e){
@@ -817,6 +907,154 @@ async function runCmd(){
     out.innerHTML+='<span class="se">Error '+s+': '+esc(typeof d==='string'?d:d.error||JSON.stringify(d))+'</span>\n';
   }
   out.scrollTop=out.scrollHeight;
+}
+
+// ── Agent playground ────────
+let AG_EVT=null; // EventSource
+let AG_SES=null; // session id
+let AG_BUSY=false;
+let AG_BOX=null; // current sandbox for agent
+
+function agentLog(html){
+  const out=document.getElementById('ag-out');
+  out.innerHTML+=html;
+  out.scrollTop=out.scrollHeight;
+}
+
+function agentConnect(boxId){
+  if(AG_EVT){AG_EVT.close();AG_EVT=null;}
+  AG_SES=null;AG_BUSY=false;AG_BOX=boxId;
+  const dot=document.getElementById('ag-dot');
+  const stat=document.getElementById('ag-status');
+  const sesEl=document.getElementById('ag-session');
+  dot.className='dot';stat.textContent='Connecting...';sesEl.textContent='';
+
+  document.getElementById('ag-out').innerHTML='<span class="si">~ Connecting to agent for <span class="prompt">'+esc(boxId)+'</span>...</span>\n';
+
+  // SSE — we use fetch+reader instead of EventSource so we can pass auth header
+  const url='/api/v1/hiveboxes/'+boxId+'/opencode/event';
+  fetch(url,{headers:{'Authorization':'Bearer '+KEY}}).then(r=>{
+    if(!r.ok){agentLog('<span class="ev-err">SSE connection failed: '+r.status+'</span>\n');return;}
+    dot.className='dot connected';stat.textContent='Connected';
+    const reader=r.body.getReader();
+    const dec=new TextDecoder();
+    let buf='';
+    function pump(){
+      reader.read().then(({done,value})=>{
+        if(done){dot.className='dot';stat.textContent='Disconnected';return;}
+        buf+=dec.decode(value,{stream:true});
+        const lines=buf.split('\n');
+        buf=lines.pop();
+        for(const line of lines){
+          if(line.startsWith('data: ')){
+            try{
+              const ev=JSON.parse(line.slice(6));
+              handleAgentEvent(ev);
+            }catch(e){}
+          }
+        }
+        pump();
+      });
+    }
+    pump();
+    // Create session
+    agentCreateSession(boxId);
+  }).catch(e=>{
+    agentLog('<span class="ev-err">Connection error: '+esc(e.message)+'</span>\n');
+  });
+}
+
+async function agentCreateSession(boxId){
+  const{s,d}=await api('POST','/api/v1/hiveboxes/'+boxId+'/opencode/session',{});
+  if(s===200&&d.id){
+    AG_SES=d.id;
+    document.getElementById('ag-session').textContent=d.slug||d.id.substring(0,12);
+    agentLog('<span class="si">~ Session: <span class="prompt">'+esc(d.slug||d.id)+'</span></span>\n<span class="ev-sep"></span>');
+  }else{
+    agentLog('<span class="ev-err">Failed to create session: '+esc(JSON.stringify(d))+'</span>\n');
+  }
+}
+
+function handleAgentEvent(ev){
+  const t=ev.type;
+  const p=ev.properties||{};
+  const out=document.getElementById('ag-out');
+  const dot=document.getElementById('ag-dot');
+  const stat=document.getElementById('ag-status');
+  const abortBtn=document.getElementById('ag-abort');
+
+  if(t==='server.connected'){
+    return; // already handled
+  }
+  if(t==='server.heartbeat')return;
+
+  if(t==='session.status'){
+    const st=p.status?.type||'';
+    if(st==='busy'){AG_BUSY=true;dot.className='dot busy';stat.textContent='Thinking...';abortBtn.classList.add('on');}
+    if(st==='idle'){AG_BUSY=false;dot.className='dot connected';stat.textContent='Connected';abortBtn.classList.remove('on');}
+    return;
+  }
+
+  if(t==='message.part.delta'){
+    const delta=p.delta||'';
+    if(!delta)return;
+    // Append text delta inline
+    const field=p.field||'text';
+    if(field==='text'){
+      agentLog('<span class="ev-text">'+esc(delta)+'</span>');
+    }else{
+      agentLog('<span style="color:#71717a;font-style:italic">'+esc(delta)+'</span>');
+    }
+    return;
+  }
+
+  if(t==='message.part.updated'){
+    const part=p.part||{};
+    if(part.type==='step-start'){
+      agentLog('\n<span class="ev-sep"></span><span class="ev-type">STEP</span>\n');
+    }else if(part.type==='step-finish'){
+      const tok=part.tokens||{};
+      const cost=part.cost||0;
+      agentLog('\n<span class="ev-sep"></span><span class="ev-type">STEP DONE</span> <span class="ev-time">reason='+esc(part.reason||'')+' tokens='+JSON.stringify(tok)+'</span>\n');
+    }else if(part.type==='tool-invocation'){
+      agentLog('\n<span class="ev-tool">TOOL: '+esc(part.toolName||'')+'</span>\n');
+      if(part.args)agentLog('<span class="ev-data">'+esc(typeof part.args==='string'?part.args:JSON.stringify(part.args))+'</span>\n');
+    }else if(part.type==='tool-result'){
+      agentLog('<span class="ev-data">'+esc(typeof part.result==='string'?part.result:JSON.stringify(part.result).substring(0,500))+'</span>\n');
+    }
+    return;
+  }
+
+  if(t==='session.idle'){
+    agentLog('\n<span class="ev-sep"></span>');
+    return;
+  }
+
+  if(t==='session.updated'){
+    const info=p.info||{};
+    if(info.title){document.getElementById('ag-session').textContent=info.title.substring(0,30);}
+    return;
+  }
+
+  // Show raw event for anything else
+  agentLog('<span class="ev-type">'+esc(t)+'</span> <span class="ev-data">'+esc(JSON.stringify(p).substring(0,300))+'</span>\n');
+}
+
+async function agentSend(){
+  const inp=document.getElementById('ag-input');
+  const text=inp.value.trim();
+  if(!text||!AG_SES||!PG_CUR)return;
+  inp.value='';
+  agentLog('\n<span class="prompt">&gt; '+esc(text)+'</span>\n');
+  const{s,d}=await api('POST','/api/v1/hiveboxes/'+PG_CUR+'/opencode/session/'+AG_SES+'/prompt_async',{parts:[{type:'text',text:text}]});
+  if(s!==204&&s!==200){
+    agentLog('<span class="ev-err">Send failed: '+esc(JSON.stringify(d))+'</span>\n');
+  }
+}
+
+async function agentAbort(){
+  if(!AG_SES||!PG_CUR)return;
+  await api('POST','/api/v1/hiveboxes/'+PG_CUR+'/opencode/session/'+AG_SES+'/abort');
 }
 
 // Auto-refresh every 5 seconds

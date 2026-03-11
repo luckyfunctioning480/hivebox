@@ -34,10 +34,25 @@ RUN apk add --no-cache \
     iptables \
     util-linux \
     squashfs-tools \
+    curl \
+    bash \
+    libstdc++ \
+    libgcc \
     && mkdir -p /var/lib/hivebox/images \
     && mkdir -p /var/lib/hivebox/sandboxes \
     && mkdir -p /var/lib/hivebox/network \
     && mkdir -p /workspace
+
+# Install opencode (AI coding agent — used by opencode serve per hivebox).
+RUN curl -fsSL https://opencode.ai/install | bash \
+    && ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode
+
+# Install git (needed to clone skills repo) and download Anthropic skills.
+RUN apk add --no-cache git \
+    && git clone --depth 1 https://github.com/anthropics/skills.git /tmp/skills \
+    && mkdir -p /root/.config/opencode/skills \
+    && cp -r /tmp/skills/skills/* /root/.config/opencode/skills/ \
+    && rm -rf /tmp/skills
 
 # Copy the static binary from the builder stage.
 COPY --from=builder /build/target/x86_64-unknown-linux-musl/release/hivebox /usr/bin/hivebox
