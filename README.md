@@ -270,6 +270,8 @@ docker run --privileged --cgroupns=host -p 7070:7070 \
 | `HIVEBOX_OPENCODE_SKILLS_PATH` | Path to skills directory (mount custom skills) | `/root/.config/opencode/skills` |
 | `HIVEBOX_OPENCODE_MCPS` | JSON of global MCP servers added to every sandbox | *(none)* |
 | `HIVEBOX_PACKAGES` | Extra Alpine packages to install at container startup | *(none)* |
+| `HIVEBOX_PIP_PACKAGES` | Extra pip packages to install at container startup | *(none)* |
+| `HIVEBOX_NPM_PACKAGES` | Extra npm global packages to install at container startup | *(none)* |
 
 All LLM and MCP settings can be overridden per-sandbox at creation time via the API (see [API docs](docs/api.md)).
 
