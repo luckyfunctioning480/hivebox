@@ -28,6 +28,10 @@ RUN cargo build --release --target x86_64-unknown-linux-musl
 # --- Stage 2: Runtime image ---
 FROM alpine:3.21
 
+LABEL org.opencontainers.image.source="https://github.com/TetiAI/hivebox" \
+      org.opencontainers.image.description="Native Linux sandboxing built for the AI era" \
+      org.opencontainers.image.licenses="MIT"
+
 # Install runtime dependencies for sandbox management.
 RUN apk add --no-cache \
     iproute2 \
