@@ -98,7 +98,7 @@ pub fn prepare_rootfs(sandbox_id: &str, image: &str) -> Result<PathBuf> {
 /// This avoids re-extracting a large squashfs for every sandbox.
 fn ensure_squashfs_extracted(squashfs_path: &Path, dest: &Path) -> Result<()> {
     // Already extracted?
-    if dest.exists() && fs::read_dir(dest).map_or(false, |mut d| d.next().is_some()) {
+    if dest.exists() && fs::read_dir(dest).is_ok_and(|mut d| d.next().is_some()) {
         debug!(dest = %dest.display(), "squashfs already extracted, reusing cache");
         return Ok(());
     }
