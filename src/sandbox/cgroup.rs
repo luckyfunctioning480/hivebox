@@ -108,9 +108,12 @@ impl CgroupManager {
         self.write_file("memory.max", &bytes.to_string())
             .context("failed to set memory.max")?;
 
-        // Disable swap — we want a hard limit, not a soft one that spills to disk.
-        // memory.swap.max = 0 means no swap at all.
-        let _ = self.write_file("memory.swap.max", "0");
+        // Allow swap equal to the memory limit. This does NOT actually use disk
+        // swap (Docker typically has none), but it prevents the kernel from
+        // counting virtual memory reservations (MAP_ANONYMOUS + PROT_NONE) against
+        // the physical memory limit. Without this, runtimes like Node.js V8 fail
+        // to reserve their CodeRange (~128 MB of virtual address space).
+        let _ = self.write_file("memory.swap.max", &bytes.to_string());
 
         debug!(
             sandbox = self.sandbox_id,

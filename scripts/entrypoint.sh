@@ -51,11 +51,22 @@ if [ -n "$current_sig" ] && [ "$current_sig" != "||" ]; then
         mv "$SQUASHFS.new" "$SQUASHFS"
         rm -rf "$WORK_DIR"
 
+        # Remove the shared rootfs cache so hivebox re-extracts from the new squashfs.
+        rm -rf /var/lib/hivebox/images/base.rootfs
+
         echo "$current_sig" > "$STAMP"
         echo "[hivebox] Sandbox base image rebuilt."
     else
         echo "[hivebox] Sandbox base image up to date (skipping rebuild)."
     fi
+fi
+
+# Pre-extract squashfs into shared cache so the first sandbox starts instantly.
+ROOTFS_CACHE="/var/lib/hivebox/images/base.rootfs"
+if [ -f "$SQUASHFS" ] && [ ! -d "$ROOTFS_CACHE" ]; then
+    echo "[hivebox] Pre-extracting squashfs to shared cache..."
+    unsquashfs -d "$ROOTFS_CACHE" "$SQUASHFS" > /dev/null 2>&1 || true
+    echo "[hivebox] Shared cache ready."
 fi
 
 # Hand off to hivebox binary.

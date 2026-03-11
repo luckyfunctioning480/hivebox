@@ -62,11 +62,17 @@ pub fn prepare_rootfs(sandbox_id: &str, image: &str) -> Result<PathBuf> {
     let rootfs_dir = PathBuf::from(IMAGES_DIR).join(image).join("rootfs");
 
     if squashfs_path.exists() {
-        // Full overlayfs path: squashfs (read-only) + tmpfs (writable).
+        // Extract squashfs once into a shared cache directory so we don't
+        // re-extract for every sandbox (unsquashfs is expensive on large images).
+        let shared_rootfs = PathBuf::from(IMAGES_DIR).join(format!("{image}.rootfs"));
+        ensure_squashfs_extracted(&squashfs_path, &shared_rootfs)?;
+
+        // Full overlayfs path: shared rootfs (read-only) + tmpfs (writable).
         prepare_rootfs_overlayfs(
             sandbox_id,
             image,
             &squashfs_path,
+            &shared_rootfs,
             &sandbox_dir,
             &squashfs_dir,
             &upper_dir,
@@ -86,74 +92,86 @@ pub fn prepare_rootfs(sandbox_id: &str, image: &str) -> Result<PathBuf> {
     }
 }
 
+/// Extracts a squashfs image into a shared cache directory (once).
+///
+/// Subsequent calls are a no-op if the directory already contains files.
+/// This avoids re-extracting a large squashfs for every sandbox.
+fn ensure_squashfs_extracted(squashfs_path: &Path, dest: &Path) -> Result<()> {
+    // Already extracted?
+    if dest.exists() && fs::read_dir(dest).map_or(false, |mut d| d.next().is_some()) {
+        debug!(dest = %dest.display(), "squashfs already extracted, reusing cache");
+        return Ok(());
+    }
+
+    fs::create_dir_all(dest)
+        .with_context(|| format!("failed to create cache dir: {}", dest.display()))?;
+
+    // Try kernel mount first (fastest).
+    if mount(
+        Some(squashfs_path),
+        dest,
+        Some("squashfs"),
+        MsFlags::MS_RDONLY,
+        None::<&str>,
+    )
+    .is_ok()
+    {
+        // Mounted — now extract to have a persistent copy, then unmount.
+        // Actually, if mount works we can just leave it mounted and use it directly.
+        info!(dest = %dest.display(), "squashfs mounted as shared cache");
+        return Ok(());
+    }
+
+    // Mount failed (e.g., Docker without loop devices) — extract with unsquashfs.
+    info!(dest = %dest.display(), "extracting squashfs to shared cache (one-time)...");
+    let status = std::process::Command::new("unsquashfs")
+        .args([
+            "-f",
+            "-d",
+            &dest.display().to_string(),
+            &squashfs_path.display().to_string(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .status()
+        .context("failed to run unsquashfs — is squashfs-tools installed?")?;
+
+    if !status.success() {
+        anyhow::bail!(
+            "unsquashfs failed (exit {}): could not extract {} to {}",
+            status.code().unwrap_or(-1),
+            squashfs_path.display(),
+            dest.display()
+        );
+    }
+
+    info!(dest = %dest.display(), "squashfs extracted to shared cache");
+    Ok(())
+}
+
 /// Prepares rootfs using the full overlayfs stack (production path).
+///
+/// Uses a shared pre-extracted rootfs as the lower layer instead of extracting
+/// the squashfs for every sandbox.
 #[allow(clippy::too_many_arguments)]
 fn prepare_rootfs_overlayfs(
     sandbox_id: &str,
     image: &str,
-    squashfs_path: &Path,
+    _squashfs_path: &Path,
+    shared_rootfs: &Path,
     sandbox_dir: &Path,
-    squashfs_dir: &Path,
+    _squashfs_dir: &Path,
     upper_dir: &Path,
     work_dir: &Path,
     merged_dir: &Path,
 ) -> Result<PathBuf> {
     // Create all directories in the overlay stack.
-    for dir in [squashfs_dir, upper_dir, work_dir, merged_dir] {
+    for dir in [upper_dir, work_dir, merged_dir] {
         fs::create_dir_all(dir)
             .with_context(|| format!("failed to create dir: {}", dir.display()))?;
     }
 
-    // Mount the squashfs image as the read-only lower layer.
-    // If mount() fails (e.g., ENOTBLK in Docker where loop devices are unavailable),
-    // fall back to extracting with unsquashfs.
-    let squashfs_mounted = mount(
-        Some(squashfs_path),
-        squashfs_dir,
-        Some("squashfs"),
-        MsFlags::MS_RDONLY,
-        None::<&str>,
-    );
-
-    if let Err(mount_err) = squashfs_mounted {
-        debug!(
-            error = %mount_err,
-            "squashfs mount failed, falling back to unsquashfs extraction"
-        );
-
-        // Extract squashfs contents to the squashfs_dir using unsquashfs.
-        let status = std::process::Command::new("unsquashfs")
-            .args([
-                "-f", // force overwrite
-                "-d", // destination directory
-                &squashfs_dir.display().to_string(),
-                &squashfs_path.display().to_string(),
-            ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .status()
-            .context("failed to run unsquashfs — is squashfs-tools installed?")?;
-
-        if !status.success() {
-            anyhow::bail!(
-                "unsquashfs failed (exit {}): could not extract {} to {}",
-                status.code().unwrap_or(-1),
-                squashfs_path.display(),
-                squashfs_dir.display()
-            );
-        }
-
-        debug!(
-            squashfs = %squashfs_path.display(),
-            dest = %squashfs_dir.display(),
-            "squashfs extracted via unsquashfs"
-        );
-    }
-
     // Mount tmpfs for the writable upper layer and overlayfs workdir.
-    // Using tmpfs means all writes are memory-backed and vanish automatically
-    // when the sandbox is destroyed. Size is generous because tmpfs only uses
-    // RAM for actual content written; the cgroup memory limit is the real constraint.
     mount(
         Some("tmpfs"),
         sandbox_dir,
@@ -161,52 +179,23 @@ fn prepare_rootfs_overlayfs(
         MsFlags::MS_NOSUID,
         Some("size=4g"),
     )
-    // If tmpfs mount on sandbox_dir fails (e.g., because squashfs_dir is already
-    // mounted inside it), fall back to just creating the dirs on the host filesystem.
     .or_else(|_| -> Result<()> {
         debug!("tmpfs mount on sandbox_dir failed, using host filesystem for upper/work");
         Ok(())
     })?;
 
     // Recreate dirs in case tmpfs mount wiped them.
-    for dir in [squashfs_dir, upper_dir, work_dir, merged_dir] {
+    for dir in [upper_dir, work_dir, merged_dir] {
         fs::create_dir_all(dir).ok();
     }
 
-    // Re-mount/re-extract squashfs if tmpfs wiped it.
-    if fs::read_dir(squashfs_dir).map_or(true, |mut d| d.next().is_none()) {
-        let remount_ok = mount(
-            Some(squashfs_path),
-            squashfs_dir,
-            Some("squashfs"),
-            MsFlags::MS_RDONLY,
-            None::<&str>,
-        )
-        .is_ok();
-
-        if !remount_ok {
-            let status = std::process::Command::new("unsquashfs")
-                .args([
-                    "-f",
-                    "-d",
-                    &squashfs_dir.display().to_string(),
-                    &squashfs_path.display().to_string(),
-                ])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .context("failed to run unsquashfs for re-extraction")?;
-
-            if !status.success() {
-                anyhow::bail!("unsquashfs re-extraction failed after tmpfs mount");
-            }
-        }
-    }
+    // Use the shared pre-extracted rootfs as the lower layer for overlayfs.
+    let lower_dir = shared_rootfs;
 
     // Mount overlayfs combining the read-only lower and writable upper.
     let overlay_opts = format!(
         "lowerdir={},upperdir={},workdir={}",
-        squashfs_dir.display(),
+        lower_dir.display(),
         upper_dir.display(),
         work_dir.display()
     );
@@ -219,10 +208,7 @@ fn prepare_rootfs_overlayfs(
     );
 
     if let Err(overlay_err) = overlay_result {
-        // Overlayfs failed (common in Docker-in-Docker or nested overlay scenarios).
-        // Fallback: mount a dedicated tmpfs on merged_dir, then copy the squashfs
-        // contents into it. This ensures the copy is memory-backed and doesn't
-        // fill the host/container filesystem.
+        // Overlayfs failed — fallback: bind-mount shared rootfs + tmpfs copy.
         info!(
             sandbox = sandbox_id,
             error = %overlay_err,
@@ -240,7 +226,7 @@ fn prepare_rootfs_overlayfs(
         let status = std::process::Command::new("cp")
             .args([
                 "-a",
-                &format!("{}/.", squashfs_dir.display()),
+                &format!("{}/.", lower_dir.display()),
                 &merged_dir.display().to_string(),
             ])
             .stdout(std::process::Stdio::null())
@@ -251,7 +237,7 @@ fn prepare_rootfs_overlayfs(
         if !status.success() {
             anyhow::bail!(
                 "failed to copy rootfs from {} to {} (exit {})",
-                squashfs_dir.display(),
+                lower_dir.display(),
                 merged_dir.display(),
                 status.code().unwrap_or(-1)
             );
@@ -261,7 +247,7 @@ fn prepare_rootfs_overlayfs(
             sandbox = sandbox_id,
             image,
             rootfs = %merged_dir.display(),
-            "rootfs prepared (tmpfs + copy fallback — memory-backed isolated filesystem)"
+            "rootfs prepared (tmpfs + copy fallback)"
         );
     } else {
         info!(
