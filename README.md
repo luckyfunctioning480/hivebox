@@ -36,6 +36,28 @@ HiveBox is the proportionate answer: kernel-native isolation with near-zero over
 
 Same security. A fraction of the resources. The smartest infrastructure is the one that uses the minimum needed for the task.
 
+## Deploy
+
+One command on any Linux VPS (Ubuntu, Debian, Alpine, etc.):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TetiAI/hivebox/main/scripts/setup.sh | sudo bash
+```
+
+This installs Docker (if needed), pulls the latest image, generates an API key, and starts HiveBox. The dashboard is available at `http://your-server:7070/dashboard`.
+
+To pass custom configuration:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TetiAI/hivebox/main/scripts/setup.sh | \
+  HIVEBOX_API_KEY=your-key \
+  HIVEBOX_OPENCODE_API_KEY=sk-... \
+  HIVEBOX_OPENCODE_MODEL=your-model \
+  sudo -E bash
+```
+
+All settings are saved in `/opt/hivebox/.env` and persist across restarts.
+
 ## Quick Start
 
 ### CLI
