@@ -533,4 +533,3 @@ async fn tool_glob(
         Ok(result.stdout)
     }
 }
-
