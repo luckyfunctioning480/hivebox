@@ -1004,9 +1004,6 @@ fn spawn_init_process(
     rootfs: &std::path::Path,
     _config: &SandboxConfig,
 ) -> Result<i32> {
-    let workspace_dir = rootfs.join("workspace");
-    let _ = std::fs::create_dir_all(&workspace_dir);
-
     let child = Command::new("unshare")
         .args([
             "--pid",
