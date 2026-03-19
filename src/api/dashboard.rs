@@ -815,7 +815,7 @@ async function destroy(id){
 }
 
 // ── Terminal sidebar ────────
-let CWD='/workspace';
+let CWD='/';
 let PG_CUR=null; // current sandbox id for terminal
 let PG_TAB='term'; // active tab
 let PG_TERM_INITED={}; // track if terminal was initialized per sandbox
@@ -824,8 +824,8 @@ let CMD_HIST_IDX=-1; // current position in history (-1 = not browsing)
 let CMD_SAVED=''; // saved current input when browsing history
 
 function shortCwd(){
-  if(CWD==='/workspace')return '~';
-  if(CWD.startsWith('/workspace/'))return '~/'+CWD.slice(11);
+  if(CWD==='/')return '~';
+  if(CWD.startsWith('/'))return '~/'+CWD.slice(1);
   return CWD;
 }
 function updatePs1(){document.getElementById('term-ps1').textContent=shortCwd()+' $';}
@@ -837,7 +837,7 @@ function openPlayground(id,tab){
   document.body.classList.add('pg-open');
   document.getElementById('pg-sandbox-id').textContent=id;
   if(isNewSandbox){
-    CWD='/workspace';updatePs1();
+    CWD='/';updatePs1();
     document.getElementById('ex-out').innerHTML='<span class="si">~ Connected to <span class="prompt">'+esc(id)+'</span></span>\n<span class="si">~ Type a command and press Enter</span>\n';
     document.getElementById('ex-cmd').value='';
     PG_TERM_INITED[id]=true;

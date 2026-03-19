@@ -45,8 +45,7 @@ RUN apk add --no-cache \
     ripgrep \
     && mkdir -p /var/lib/hivebox/images \
     && mkdir -p /var/lib/hivebox/sandboxes \
-    && mkdir -p /var/lib/hivebox/network \
-    && mkdir -p /workspace
+    && mkdir -p /var/lib/hivebox/network
 
 # Install opencode (AI coding agent — used by opencode serve per hivebox).
 RUN curl -fsSL https://opencode.ai/install | bash \

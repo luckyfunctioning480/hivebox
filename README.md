@@ -294,9 +294,9 @@ docker run --privileged --cgroupns=host -p 7070:7070 \
 | `HIVEBOX_OPENCODE_MODEL` | Default LLM model for all sandboxes | *(opencode default)* |
 | `HIVEBOX_OPENCODE_SKILLS_PATH` | Path to skills directory | `/opt/hivebox/skills` |
 | `HIVEBOX_OPENCODE_MCPS` | JSON of global MCP servers added to every sandbox | *(none)* |
-| `HIVEBOX_PACKAGES` | Extra Alpine packages to install at container startup | *(none)* |
-| `HIVEBOX_PIP_PACKAGES` | Extra pip packages to install at container startup | *(none)* |
-| `HIVEBOX_NPM_PACKAGES` | Extra npm global packages to install at container startup | *(none)* |
+| `HIVEBOX_PACKAGES` | Alpine packages to install at startup (also reported to agents as pre-installed) | *(none)* |
+| `HIVEBOX_PIP_PACKAGES` | pip packages to install at startup (also reported to agents as pre-installed) | *(none)* |
+| `HIVEBOX_NPM_PACKAGES` | npm global packages to install at startup (also reported to agents as pre-installed) | *(none)* |
 
 All LLM and MCP settings can be overridden per-sandbox at creation time via the API (see [API docs](docs/api.md)).
 

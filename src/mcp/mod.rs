@@ -170,6 +170,33 @@ impl HiveboxClient {
     }
 }
 
+/// Builds MCP instructions with pre-installed package info from env vars.
+fn build_mcp_instructions() -> String {
+    let mut s = String::from(
+        "HiveBox is a lightweight Linux sandbox running Alpine Linux (musl libc, apk package manager). \
+         Commands run as root. The default working directory is /. ",
+    );
+    if let Ok(pkgs) = std::env::var("HIVEBOX_PACKAGES") {
+        s.push_str(&format!(
+            "Pre-installed system packages (DO NOT reinstall): {}. ",
+            pkgs
+        ));
+    }
+    if let Ok(pkgs) = std::env::var("HIVEBOX_PIP_PACKAGES") {
+        s.push_str(&format!("Pre-installed pip packages: {}. ", pkgs));
+    }
+    if let Ok(pkgs) = std::env::var("HIVEBOX_NPM_PACKAGES") {
+        s.push_str(&format!(
+            "Pre-installed npm global packages: {}. ",
+            pkgs
+        ));
+    }
+    s.push_str(
+        "Use the 'exec' tool for shell commands and the file tools for reading/writing files.",
+    );
+    s
+}
+
 /// Simple percent-encoding for path query parameters.
 fn urlencoded(s: &str) -> String {
     s.replace('%', "%25")
@@ -204,7 +231,7 @@ pub fn tool_definitions() -> serde_json::Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "File path (absolute or relative to /workspace)" },
+                    "path": { "type": "string", "description": "File path (absolute or relative to /)" },
                     "head": { "type": "integer", "description": "Read only the first N lines" },
                     "tail": { "type": "integer", "description": "Read only the last N lines" }
                 },
@@ -348,7 +375,7 @@ pub fn tool_definitions() -> serde_json::Value {
                 "type": "object",
                 "properties": {
                     "pattern": { "type": "string", "description": "Glob pattern to match (e.g. '**/*.ts', 'src/**/*.rs', '*.json')" },
-                    "path": { "type": "string", "description": "Root directory to search in (defaults to /workspace)" }
+                    "path": { "type": "string", "description": "Root directory to search in (defaults to /)" }
                 },
                 "required": ["pattern"]
             }
@@ -612,7 +639,7 @@ async fn tool_glob(client: &HiveboxClient, args: &serde_json::Value) -> Result<S
     let path = args
         .get("path")
         .and_then(|v| v.as_str())
-        .unwrap_or("/workspace");
+        .unwrap_or("/");
 
     // Use find with -name/-path depending on whether pattern contains /
     let cmd = if pattern.contains('/') {
@@ -747,14 +774,7 @@ pub async fn run(
                         "name": "hivebox",
                         "version": env!("CARGO_PKG_VERSION")
                     },
-                    "instructions": concat!(
-                        "HiveBox is a lightweight Linux sandbox. ",
-                        "The sandbox runs Alpine Linux (musl libc, apk package manager). ",
-                        "Use 'apk add <pkg>' to install packages (e.g. apk add python3, apk add nodejs npm, apk add git). ",
-                        "The default working directory is /workspace. ",
-                        "Commands run as root inside the sandbox. ",
-                        "Use the 'exec' tool for shell commands and the file tools for reading/writing files."
-                    )
+                    "instructions": build_mcp_instructions()
                 }),
             ),
             "tools/list" => JsonRpcResponse::success(

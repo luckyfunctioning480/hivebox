@@ -62,6 +62,10 @@ fn daemon_config_from_env(port: u16, api_key: Option<String>) -> DaemonConfig {
     let llm_api_key = std::env::var("HIVEBOX_OPENCODE_API_KEY").ok();
     let llm_model = std::env::var("HIVEBOX_OPENCODE_MODEL").ok();
 
+    let installed_packages = std::env::var("HIVEBOX_PACKAGES").ok();
+    let installed_pip = std::env::var("HIVEBOX_PIP_PACKAGES").ok();
+    let installed_npm = std::env::var("HIVEBOX_NPM_PACKAGES").ok();
+
     DaemonConfig {
         port,
         api_key,
@@ -71,6 +75,9 @@ fn daemon_config_from_env(port: u16, api_key: Option<String>) -> DaemonConfig {
         llm_base_url,
         llm_api_key,
         llm_model,
+        installed_packages,
+        installed_pip,
+        installed_npm,
     }
 }
 

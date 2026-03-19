@@ -252,11 +252,11 @@ Lists all files and directories recursively from the given path inside the sandb
 **Response** (`200 OK`):
 ```json
 {
-  "path": "/workspace",
+  "path": "/",
   "entries": [
-    { "name": "src", "path": "/workspace/src", "entry_type": "directory" },
-    { "name": "main.rs", "path": "/workspace/src/main.rs", "entry_type": "file", "size": 1234 },
-    { "name": "README.md", "path": "/workspace/README.md", "entry_type": "file", "size": 567 }
+    { "name": "src", "path": "/src", "entry_type": "directory" },
+    { "name": "main.rs", "path": "/src/main.rs", "entry_type": "file", "size": 1234 },
+    { "name": "README.md", "path": "/README.md", "entry_type": "file", "size": 567 }
   ],
   "total": 3
 }

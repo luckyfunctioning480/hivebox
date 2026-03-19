@@ -96,7 +96,7 @@ hivebox exec <SANDBOX> -- <COMMAND>...
 hivebox exec myagent -- pip install requests
 
 # Run a script
-hivebox exec myagent -- python3 /workspace/script.py
+hivebox exec myagent -- python3 /script.py
 
 # Check disk usage
 hivebox exec myagent -- df -h

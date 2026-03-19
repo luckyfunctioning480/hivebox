@@ -155,6 +155,12 @@ pub struct DaemonConfig {
     pub llm_api_key: Option<String>,
     /// Global LLM model. Set via `HIVEBOX_OPENCODE_MODEL`.
     pub llm_model: Option<String>,
+    /// Pre-installed system packages (space-separated). Set via `HIVEBOX_PACKAGES`.
+    pub installed_packages: Option<String>,
+    /// Pre-installed pip packages (space-separated). Set via `HIVEBOX_PIP_PACKAGES`.
+    pub installed_pip: Option<String>,
+    /// Pre-installed npm packages (space-separated). Set via `HIVEBOX_NPM_PACKAGES`.
+    pub installed_npm: Option<String>,
 }
 
 /// Base port for internal opencode serve instances.
@@ -183,12 +189,48 @@ impl SandboxManager {
             llm_base_url: None,
             llm_api_key: None,
             llm_model: None,
+            installed_packages: None,
+            installed_pip: None,
+            installed_npm: None,
         })
     }
 
     /// Returns the path to the skills directory on the host.
     pub fn skills_path(&self) -> &std::path::Path {
         &self.daemon_config.skills_path
+    }
+
+    /// Builds the MCP instructions string, including pre-installed package info.
+    pub fn mcp_instructions(&self) -> String {
+        let mut s = String::from(
+            "HiveBox is a lightweight Linux sandbox running Alpine Linux (musl libc, apk package manager). \
+             Commands run as root. The default working directory is /. ",
+        );
+        if let Some(ref pkgs) = self.daemon_config.installed_packages {
+            s.push_str(&format!(
+                "Pre-installed system packages (DO NOT reinstall): {}. ",
+                pkgs
+            ));
+        }
+        if let Some(ref pkgs) = self.daemon_config.installed_pip {
+            s.push_str(&format!("Pre-installed pip packages: {}. ", pkgs));
+        }
+        if let Some(ref pkgs) = self.daemon_config.installed_npm {
+            s.push_str(&format!(
+                "Pre-installed npm global packages: {}. ",
+                pkgs
+            ));
+        }
+        if self.daemon_config.installed_packages.is_some()
+            || self.daemon_config.installed_pip.is_some()
+            || self.daemon_config.installed_npm.is_some()
+        {
+            s.push_str("Use 'apk add <pkg>' only for packages not listed above. ");
+        }
+        s.push_str(
+            "Use the 'exec' tool for shell commands and the file tools for reading/writing files.",
+        );
+        s
     }
 
     pub fn with_config(daemon_config: DaemonConfig) -> Self {
@@ -263,7 +305,7 @@ impl SandboxManager {
             expires_at_str: format_system_time(now_sys + Duration::from_secs(timeout)),
             network_info,
             rootfs_path: Some(rootfs_path),
-            cwd: "/workspace".to_string(),
+            cwd: "/".to_string(),
             commands_executed: 0,
             cumulative_cpu_usec: 0,
             opencode_port: None,
@@ -357,18 +399,38 @@ impl SandboxManager {
         }
 
         // Build instructions for the AI agent.
-        let default_instructions = vec![
+        let mut default_instructions = vec![
             format!("You are operating inside a HiveBox sandbox (ID: {sandbox_id}) running Alpine Linux (musl libc)."),
-            "Use apk for package management (e.g., `apk add python3 nodejs npm git`).".to_string(),
             "The sandbox has limited resources and no persistent storage — files are lost on destroy.".to_string(),
             "Use the MCP tools available to you (exec, read_file, write_file, etc.) to interact with the sandbox filesystem.".to_string(),
+        ];
+        // Add pre-installed package info so the agent doesn't waste time reinstalling.
+        if let Some(ref pkgs) = self.daemon_config.installed_packages {
+            default_instructions.push(format!(
+                "Pre-installed system packages (DO NOT reinstall): {}.",
+                pkgs
+            ));
+        }
+        if let Some(ref pkgs) = self.daemon_config.installed_pip {
+            default_instructions.push(format!(
+                "Pre-installed pip packages: {}.",
+                pkgs
+            ));
+        }
+        if let Some(ref pkgs) = self.daemon_config.installed_npm {
+            default_instructions.push(format!(
+                "Pre-installed npm global packages: {}.",
+                pkgs
+            ));
+        }
+        default_instructions.extend([
             "You have access to specialized skills. When a task involves a specific domain (PDF, PPTX, DOCX, XLSX, etc.), follow this workflow:".to_string(),
             "  1. Call list_skills to discover what skills are available.".to_string(),
             "  2. Call read_skill_file(skill, 'SKILL.md') to load the skill's instructions.".to_string(),
             "  3. If the skill references additional files (e.g. pptxgenjs.md, forms.md), call read_skill_file to read them.".to_string(),
-            "  4. Follow the skill instructions exactly, using exec to run scripts and install required packages.".to_string(),
+            "  4. Follow the skill instructions exactly, using exec to run scripts.".to_string(),
             "Always load the relevant skill BEFORE attempting a specialized task.".to_string(),
-        ];
+        ]);
         let instructions: Vec<String> = std::env::var("HIVEBOX_OPENCODE_INSTRUCTIONS")
             .map(|s| s.lines().map(|l| l.to_string()).collect())
             .unwrap_or(default_instructions);
@@ -965,7 +1027,7 @@ fn spawn_init_process(
             &format!("--root={}", rootfs.display()),
             "/bin/sh",
             "-c",
-            "mount -t proc proc /proc 2>/dev/null; mount -t devtmpfs devtmpfs /dev 2>/dev/null || { mkdir -p /dev; mknod -m 666 /dev/null c 1 3 2>/dev/null; mknod -m 666 /dev/zero c 1 5 2>/dev/null; mknod -m 666 /dev/urandom c 1 9 2>/dev/null; mknod -m 666 /dev/random c 1 8 2>/dev/null; mknod -m 666 /dev/tty c 5 0 2>/dev/null; }; mkdir -p /workspace; exec sleep infinity",
+            "mount -t proc proc /proc 2>/dev/null; mount -t devtmpfs devtmpfs /dev 2>/dev/null || { mkdir -p /dev; mknod -m 666 /dev/null c 1 3 2>/dev/null; mknod -m 666 /dev/zero c 1 5 2>/dev/null; mknod -m 666 /dev/urandom c 1 9 2>/dev/null; mknod -m 666 /dev/random c 1 8 2>/dev/null; mknod -m 666 /dev/tty c 5 0 2>/dev/null; }; exec sleep infinity",
         ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

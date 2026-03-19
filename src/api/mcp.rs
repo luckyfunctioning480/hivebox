@@ -141,14 +141,7 @@ pub async fn mcp_handler(
                     "name": "hivebox",
                     "version": env!("CARGO_PKG_VERSION")
                 },
-                "instructions": concat!(
-                    "HiveBox is a lightweight Linux sandbox. ",
-                    "The sandbox runs Alpine Linux (musl libc, apk package manager). ",
-                    "Use 'apk add <pkg>' to install packages (e.g. apk add python3, apk add nodejs npm, apk add git). ",
-                    "The default working directory is /workspace. ",
-                    "Commands run as root inside the sandbox. ",
-                    "Use the 'exec' tool for shell commands and the file tools for reading/writing files."
-                )
+                "instructions": state.manager.mcp_instructions()
             }),
         ),
         "tools/list" => JsonRpcResponse::success(
@@ -586,7 +579,7 @@ async fn tool_glob(
     let path = args
         .get("path")
         .and_then(|v| v.as_str())
-        .unwrap_or("/workspace");
+        .unwrap_or("/");
 
     let cmd = if pattern.contains('/') {
         format!(
