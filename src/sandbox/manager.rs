@@ -216,10 +216,7 @@ impl SandboxManager {
             s.push_str(&format!("Pre-installed pip packages: {}. ", pkgs));
         }
         if let Some(ref pkgs) = self.daemon_config.installed_npm {
-            s.push_str(&format!(
-                "Pre-installed npm global packages: {}. ",
-                pkgs
-            ));
+            s.push_str(&format!("Pre-installed npm global packages: {}. ", pkgs));
         }
         if self.daemon_config.installed_packages.is_some()
             || self.daemon_config.installed_pip.is_some()
@@ -412,16 +409,10 @@ impl SandboxManager {
             ));
         }
         if let Some(ref pkgs) = self.daemon_config.installed_pip {
-            default_instructions.push(format!(
-                "Pre-installed pip packages: {}.",
-                pkgs
-            ));
+            default_instructions.push(format!("Pre-installed pip packages: {}.", pkgs));
         }
         if let Some(ref pkgs) = self.daemon_config.installed_npm {
-            default_instructions.push(format!(
-                "Pre-installed npm global packages: {}.",
-                pkgs
-            ));
+            default_instructions.push(format!("Pre-installed npm global packages: {}.", pkgs));
         }
         default_instructions.extend([
             "You have access to specialized skills. When a task involves a specific domain (PDF, PPTX, DOCX, XLSX, etc.), follow this workflow:".to_string(),

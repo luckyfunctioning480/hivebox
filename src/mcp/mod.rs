@@ -186,10 +186,7 @@ fn build_mcp_instructions() -> String {
         s.push_str(&format!("Pre-installed pip packages: {}. ", pkgs));
     }
     if let Ok(pkgs) = std::env::var("HIVEBOX_NPM_PACKAGES") {
-        s.push_str(&format!(
-            "Pre-installed npm global packages: {}. ",
-            pkgs
-        ));
+        s.push_str(&format!("Pre-installed npm global packages: {}. ", pkgs));
     }
     s.push_str(
         "Use the 'exec' tool for shell commands and the file tools for reading/writing files.",
