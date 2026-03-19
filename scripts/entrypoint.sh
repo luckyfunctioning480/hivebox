@@ -45,6 +45,11 @@ if [ -n "$current_sig" ] && [ "$current_sig" != "||" ]; then
             chroot "$ROOTFS" /bin/sh -c "npm install -g $HIVEBOX_NPM_PACKAGES" || echo "[hivebox] WARNING: some npm packages failed"
         fi
 
+        # Set NODE_OPTIONS to limit V8 memory (prevents OOM in constrained sandboxes).
+        echo 'export NODE_OPTIONS="--max-old-space-size=256"' >> "$ROOTFS/etc/profile"
+        mkdir -p "$ROOTFS/etc/profile.d"
+        echo 'export NODE_OPTIONS="--max-old-space-size=256"' > "$ROOTFS/etc/profile.d/node.sh"
+
         # Repackage as squashfs (fast compression for startup speed).
         echo "[hivebox]   -> Repackaging squashfs..."
         mksquashfs "$ROOTFS" "$SQUASHFS.new" -comp zstd -Xcompression-level 3 -noappend -quiet

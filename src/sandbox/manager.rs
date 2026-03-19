@@ -634,12 +634,16 @@ impl SandboxManager {
         // Enforce resource limits via ulimit (works even when cgroup controllers
         // aren't delegated, e.g. inside Docker). This is a defense-in-depth
         // measure — cgroup limits are still set if available.
-        let mem_kb = limits.memory_bytes / 1024;
         let nproc = limits.max_pids;
-        // ulimit -v = virtual memory (kB), -u = max user processes, -t = CPU time (seconds)
+        // Node.js max-old-space-size = half of sandbox memory (in MB), minimum 128MB.
+        let node_max_mb = std::cmp::max(128, limits.memory_bytes / 1024 / 1024 / 2);
+        // ulimit -u = max user processes, -t = CPU time (seconds).
+        // Note: ulimit -v (virtual memory) is NOT set because cgroups already limit
+        // physical memory, and V8 needs large virtual address space reservations
+        // (mmap) for its CodeRange that don't consume actual RAM.
         let cpu_secs = 3600; // 1 hour max CPU time per command
         let wrapped = format!(
-            "ulimit -v {mem_kb} 2>/dev/null; ulimit -u {nproc} 2>/dev/null; ulimit -t {cpu_secs} 2>/dev/null; cd {cwd} 2>/dev/null; {command}; echo {CWD_MARKER}$(pwd)"
+            "export NODE_OPTIONS='--max-old-space-size={node_max_mb}'; ulimit -u {nproc} 2>/dev/null; ulimit -t {cpu_secs} 2>/dev/null; cd {cwd} 2>/dev/null; {command}; echo {CWD_MARKER}$(pwd)"
         );
         let start = std::time::Instant::now();
         let child = Command::new("nsenter")
